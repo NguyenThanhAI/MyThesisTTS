@@ -12,7 +12,7 @@ checkpoint
 *.meta
 *.index
 *.data*
-*.csv
+# *.csv
 *.npy
 *.pth
 *.h5

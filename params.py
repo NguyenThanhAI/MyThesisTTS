@@ -10,9 +10,9 @@ from model.utils import fix_len_compatibility
 
 
 # data parameters
-train_filelist_path = "resources/filelists/ljspeech/train.txt"
-valid_filelist_path = "resources/filelists/ljspeech/valid.txt"
-test_filelist_path = "resources/filelists/ljspeech/test.txt"
+train_filelist_path = "resources/filelists/ljspeech/train.csv"
+valid_filelist_path = "resources/filelists/ljspeech/valid.csv"
+test_filelist_path = "resources/filelists/ljspeech/test.csv"
 audio_directory = r"D:\TTS_Dataset\LJSpeech-1.1\ljspeech"
 cmudict_path = "resources/cmu_dictionary"
 add_blank = True
