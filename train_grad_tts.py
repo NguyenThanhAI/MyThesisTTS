@@ -121,7 +121,7 @@ if __name__ == "__main__":
     torch.manual_seed(random_seed)
     np.random.seed(random_seed)
 
-    print(audio_directory, train_filelist_path, valid_filelist_path, cmudict_path, add_blank, log_dir, n_epochs, batch_size, out_size, learning_rate, random_seed, n_enc_channels, filter_channels, filter_channels_dp, n_enc_layers, enc_kernel, enc_dropout, n_heads, window_size, n_feats, n_fft, sample_rate, hop_length, win_length, f_min, f_max, dec_dim, beta_min, beta_max, pe_scale)
+    print(f"Arguments: {args}")
 
     print('Initializing logger...')
 
