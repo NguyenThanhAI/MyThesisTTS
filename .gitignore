@@ -28,6 +28,7 @@ checkpoint
 *.jsonl
 *.c
 
+*.pt
 monotonic_align
 
 generated_data/
