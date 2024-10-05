@@ -22,7 +22,7 @@ def intersperse(lst, item):
 
 
 def parse_filelist(filelist_path, audio_directory, split_char="|"):
-    with open(filelist_path) as f:
+    with open(filelist_path, encoding="utf-8") as f:
         filepaths_and_text = [line.strip().split(split_char) for line in f]
     filepaths_and_text = list(map(lambda x: [os.path.join(audio_directory, x[0]), x[1]], filepaths_and_text))
     return filepaths_and_text
