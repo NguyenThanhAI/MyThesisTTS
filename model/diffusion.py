@@ -141,11 +141,15 @@ class SinusoidalPosEmb(BaseModule):
     def forward(self, x, scale=1000):
         device = x.device
         half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device).float() * -emb)
+        emb = math.log(10000) / self.dim
+        emb = torch.exp(2 * torch.arange(half_dim, device=device).float() * -emb)
         emb = scale * x.unsqueeze(1) * emb.unsqueeze(0)
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
+        # emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        # return emb
+        pe = torch.zeros(x.shape[0], self.dim, device=device)
+        pe[:, ::2] = emb.sin()
+        pe[:, 1::2] = emb.cos()
+        return pe
 
 
 class GradLogPEstimator2d(BaseModule):

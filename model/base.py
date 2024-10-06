@@ -61,16 +61,22 @@ class LayerNorm(BaseModule):
     
 
 class SinusoidalPositionalEncoding(BaseModule):
+    """
+    PE(pos, 2i) = sin(pos / 10000^(2i / dim))
+    PE(pos, 2i + 1) = cos(pos / 10000^(2i / dim))
+    """
 
     def __init__(self, dim: int, dropout: float=0.1, max_len: int=5000):
+        assert dim % 2 == 0, print("[ERROR]: dim: {} must be an even number".format(dim))
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim, 2) * (-math.log(10000.0) / dim))
+        half_dim = dim // 2
+        div_term = torch.exp(2 * torch.arange(0, half_dim, dtype=torch.float) * (-math.log(10000.0) / dim)).unsqueeze(0)
         pe = torch.zeros(max_len, dim)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position.float() * div_term)
+        pe[:, 1::2] = torch.cos(position.float() * div_term)
         self.register_buffer('pe', pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
