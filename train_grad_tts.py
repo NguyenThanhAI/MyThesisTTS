@@ -22,16 +22,17 @@ from data import TextMelDataset, TextMelBatchCollate
 from utils import plot_tensor, save_plot
 from text.symbols import symbols
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def str2bool(v):
     if isinstance(v, bool):
        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+    if v.lower() in ("yes", "true", "t", "y", "1"):
         return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+    elif v.lower() in ("no", "false", "f", "n", "0"):
         return False
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 def get_args():
@@ -123,14 +124,14 @@ if __name__ == "__main__":
 
     print(f"Arguments: {args}")
 
-    print('Initializing logger...')
+    print("Initializing logger...")
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
 
     logger = SummaryWriter(log_dir=log_dir)
 
-    print('Initializing data loaders...')
+    print("Initializing data loaders...")
     train_dataset = TextMelDataset(filelist_path=train_filelist_path, audio_directory=audio_directory,
                                    cmudict_path=cmudict_path, add_blank=add_blank,
                                    n_fft=n_fft, n_mels=n_feats, sample_rate=sample_rate, hop_length=hop_length,
@@ -144,15 +145,15 @@ if __name__ == "__main__":
                                   n_fft=n_fft, n_mels=n_feats, sample_rate=sample_rate, hop_length=hop_length,
                                   win_length=win_length, f_min=f_min, f_max=f_max)
     
-    print('Initializing model...')
+    print("Initializing model...")
     model = GradTTS(n_vocab=nsymbols, n_spks=1, spk_emb_dim=None, n_enc_channels=n_enc_channels, filter_channels=filter_channels, filter_channels_dp=filter_channels_dp, 
                     n_heads=n_heads, n_enc_layers=n_enc_layers, enc_kernel=enc_kernel, enc_dropout=enc_dropout, window_size=window_size, 
-                    n_feats=n_feats, dec_dim=dec_dim, beta_min=beta_min, beta_max=beta_max, pe_scale=pe_scale).cuda()
-    print('Number of encoder + duration predictor parameters: %.2fm' % (model.encoder.nparams/1e6))
-    print('Number of decoder parameters: %.2fm' % (model.decoder.nparams/1e6))
-    print('Total parameters: %.2fm' % (model.nparams/1e6))
+                    n_feats=n_feats, dec_dim=dec_dim, beta_min=beta_min, beta_max=beta_max, pe_scale=pe_scale).to(device=device)
+    print("Number of encoder + duration predictor parameters: %.2fm" % (model.encoder.nparams/1e6))
+    print("Number of decoder parameters: %.2fm" % (model.decoder.nparams/1e6))
+    print("Total parameters: %.2fm" % (model.nparams/1e6))
 
-    print('Initializing optimizer...')
+    print("Initializing optimizer...")
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate)
 
     if pretrained_checkpoint is not None:
@@ -167,15 +168,15 @@ if __name__ == "__main__":
         epoch_done = 0
         iteration = 0
 
-    print('Logging test batch...')
+    print("Logging test batch...")
     test_batch = test_dataset.sample_test_batch(size=params.test_size)
     for i, item in enumerate(test_batch):
-        mel = item['y']
-        logger.add_image(f'image_{i}/ground_truth', plot_tensor(mel.squeeze()),
-                         global_step=0, dataformats='HWC')
-        save_plot(mel.squeeze(), f'{log_dir}/original_{i}.png')
+        mel = item["y"]
+        logger.add_image(f"image_{i}/ground_truth", plot_tensor(mel.squeeze()),
+                         global_step=0, dataformats="HWC")
+        save_plot(mel.squeeze(), f"{log_dir}/original_{i}.png")
 
-    print('Start training...')
+    print("Start training...")
     # iteration = 0
     for epoch in range(epoch_done + 1, n_epochs + 1):
         model.train()
@@ -185,29 +186,29 @@ if __name__ == "__main__":
         with tqdm(loader, total=len(train_dataset)//batch_size) as progress_bar:
             for batch_idx, batch in enumerate(progress_bar):
                 model.zero_grad()
-                x, x_lengths = batch['x'].cuda(), batch['x_lengths'].cuda()
-                y, y_lengths = batch['y'].cuda(), batch['y_lengths'].cuda()
-                dur_loss, prior_loss, diff_loss = model.compute_loss(x, x_lengths,
-                                                                     y, y_lengths,
+                x, x_lengths = batch["x"].to(device=device), batch["x_lengths"].to(device=device)
+                y, y_lengths = batch["y"].to(device=device), batch["y_lengths"].to(device=device)
+                dur_loss, prior_loss, diff_loss = model.compute_loss(x=x, x_lengths=x_lengths,
+                                                                     y=y, y_lengths=y_lengths,
                                                                      out_size=out_size)
                 loss = sum([dur_loss, prior_loss, diff_loss])
                 loss.backward()
 
-                enc_grad_norm = torch.nn.utils.clip_grad_norm_(model.encoder.parameters(),
+                enc_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.encoder.parameters(),
                                                                max_norm=1)
-                dec_grad_norm = torch.nn.utils.clip_grad_norm_(model.decoder.parameters(),
+                dec_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.decoder.parameters(),
                                                                max_norm=1)
                 optimizer.step()
 
-                logger.add_scalar('training/duration_loss', dur_loss.item(),
+                logger.add_scalar("training/duration_loss", dur_loss.item(),
                                   global_step=iteration)
-                logger.add_scalar('training/prior_loss', prior_loss.item(),
+                logger.add_scalar("training/prior_loss", prior_loss.item(),
                                   global_step=iteration)
-                logger.add_scalar('training/diffusion_loss', diff_loss.item(),
+                logger.add_scalar("training/diffusion_loss", diff_loss.item(),
                                   global_step=iteration)
-                logger.add_scalar('training/encoder_grad_norm', enc_grad_norm,
+                logger.add_scalar("training/encoder_grad_norm", enc_grad_norm,
                                   global_step=iteration)
-                logger.add_scalar('training/decoder_grad_norm', dec_grad_norm,
+                logger.add_scalar("training/decoder_grad_norm", dec_grad_norm,
                                   global_step=iteration)
                 
                 dur_losses.append(dur_loss.item())
@@ -215,42 +216,42 @@ if __name__ == "__main__":
                 diff_losses.append(diff_loss.item())
                 
                 if batch_idx % 5 == 0:
-                    msg = f'Epoch: {epoch}, iteration: {iteration} | dur_loss: {dur_loss.item()}, prior_loss: {prior_loss.item()}, diff_loss: {diff_loss.item()}'
+                    msg = f"Epoch: {epoch}, iteration: {iteration} | dur_loss: {dur_loss.item()}, prior_loss: {prior_loss.item()}, diff_loss: {diff_loss.item()}"
                     progress_bar.set_description(msg)
                 
                 iteration += 1
 
-        log_msg = 'Epoch %d: duration loss = %.3f ' % (epoch, np.mean(dur_losses))
-        log_msg += '| prior loss = %.3f ' % np.mean(prior_losses)
-        log_msg += '| diffusion loss = %.3f\n' % np.mean(diff_losses)
-        with open(f'{log_dir}/train.log', 'a') as f:
+        log_msg = "Epoch %d: duration loss = %.3f " % (epoch, np.mean(dur_losses))
+        log_msg += "| prior loss = %.3f " % np.mean(prior_losses)
+        log_msg += "| diffusion loss = %.3f\n" % np.mean(diff_losses)
+        with open(f"{log_dir}/train.log", "a") as f:
             f.write(log_msg)
 
         if epoch % args.save_every > 0:
             continue
 
         model.eval()
-        print('Synthesis...')
+        print("Synthesis...")
         with torch.no_grad():
             for i, item in enumerate(test_batch):
-                x = item['x'].to(torch.long).unsqueeze(0).cuda()
-                x_lengths = torch.LongTensor([x.shape[-1]]).cuda()
+                x = item["x"].to(torch.long).unsqueeze(0).to(device=device)
+                x_lengths = torch.LongTensor([x.shape[-1]]).to(device=device)
                 y_enc, y_dec, attn = model(x, x_lengths, n_timesteps=50)
-                logger.add_image(f'image_{i}/generated_enc',
+                logger.add_image(f"image_{i}/generated_enc",
                                  plot_tensor(y_enc.squeeze().cpu()),
-                                 global_step=iteration, dataformats='HWC')
-                logger.add_image(f'image_{i}/generated_dec',
+                                 global_step=iteration, dataformats="HWC")
+                logger.add_image(f"image_{i}/generated_dec",
                                  plot_tensor(y_dec.squeeze().cpu()),
-                                 global_step=iteration, dataformats='HWC')
-                logger.add_image(f'image_{i}/alignment',
+                                 global_step=iteration, dataformats="HWC")
+                logger.add_image(f"image_{i}/alignment",
                                  plot_tensor(attn.squeeze().cpu()),
-                                 global_step=iteration, dataformats='HWC')
+                                 global_step=iteration, dataformats="HWC")
                 save_plot(y_enc.squeeze().cpu(), 
-                          f'{log_dir}/generated_enc_{i}.png')
+                          f"{log_dir}/generated_enc_{i}.png")
                 save_plot(y_dec.squeeze().cpu(), 
-                          f'{log_dir}/generated_dec_{i}.png')
+                          f"{log_dir}/generated_dec_{i}.png")
                 save_plot(attn.squeeze().cpu(), 
-                          f'{log_dir}/alignment_{i}.png')
+                          f"{log_dir}/alignment_{i}.png")
 
         # ckpt = model.state_dict()
         ckpt = {"model_state_dict": model.state_dict(),
