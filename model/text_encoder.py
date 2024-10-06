@@ -4,29 +4,8 @@ import math
 
 import torch
 
-from model.base import BaseModule
+from model.base import BaseModule, LayerNorm, SinusoidalPositionalEncoding
 from model.utils import sequence_mask, convert_pad_shape
-
-
-class LayerNorm(BaseModule):
-    def __init__(self, channels, eps=1e-4):
-        super(LayerNorm, self).__init__()
-        self.channels = channels
-        self.eps = eps
-
-        self.gamma = torch.nn.Parameter(data=torch.ones(channels))
-        self.beta = torch.nn.Parameter(data=torch.zeros(channels))
-
-    def forward(self, x):
-        n_dims = len(x.shape)
-        mean = torch.mean(input=x, dim=1, keepdim=True)
-        variance = torch.mean(input=(x - mean)**2, dim=1, keepdim=True)
-
-        x = (x - mean) * torch.rsqrt(variance + self.eps)
-
-        shape = [1, -1] + [1] * (n_dims - 2)
-        x = x * self.gamma.view(*shape) + self.beta.view(*shape)
-        return x
     
 
 class ConvReluNorm(BaseModule):
@@ -317,6 +296,8 @@ class TextEncoder(BaseModule):
         self.n_spks = n_spks
 
         self.emb = torch.nn.Embedding(num_embeddings=n_vocab, embedding_dim=n_channels)
+
+        self.pos_emb = SinusoidalPositionalEncoding(dim=n_channels)
         torch.nn.init.normal_(tensor=self.emb.weight, mean=0.0, std=n_channels**-0.5)
 
         self.prenet = ConvReluNorm(in_channels=n_channels, 
@@ -344,6 +325,7 @@ class TextEncoder(BaseModule):
 
     def forward(self, x, x_lengths, spk=None):
         x = self.emb(x) * math.sqrt(self.n_channels)
+        x = self.pos_emb(x)
         x = torch.transpose(x, 1, -1)
         x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
