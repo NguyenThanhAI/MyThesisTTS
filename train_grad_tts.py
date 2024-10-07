@@ -9,6 +9,8 @@ import os
 
 import argparse
 
+import time
+
 import numpy as np
 from tqdm import tqdm
 
@@ -71,6 +73,7 @@ def get_args():
     parser.add_argument("--beta_max", type=float, default=params.beta_max)
     parser.add_argument("--pe_scale", type=int, default=params.pe_scale)
     parser.add_argument("--save_every", type=int, default=params.save_every)
+    parser.add_argument("--max_time_run", type=int, default=None)
 
     args = parser.parse_args()
 
@@ -78,6 +81,8 @@ def get_args():
 
 
 if __name__ == "__main__":
+
+    start_time = time.time()
 
     args = get_args()
     
@@ -118,6 +123,7 @@ if __name__ == "__main__":
     beta_max = args.beta_max
     pe_scale = args.pe_scale
     save_every = args.save_every
+    max_time_run = args.max_time_run
 
     torch.manual_seed(random_seed)
     np.random.seed(random_seed)
@@ -227,8 +233,16 @@ if __name__ == "__main__":
         with open(f"{log_dir}/train.log", "a") as f:
             f.write(log_msg)
 
-        if epoch % args.save_every > 0:
-            continue
+        time_run = time.time() - start_time
+        
+        if max_time_run is None:
+            stop_now = False
+        else:
+            stop_now = True if time_run >= max_time_run else False
+
+        if not stop_now:
+            if epoch % save_every:
+                continue
 
         model.eval()
         print("Synthesis...")
@@ -260,3 +274,7 @@ if __name__ == "__main__":
                 "iteration": iteration}
         print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
         torch.save(ckpt, f=f"{log_dir}/grad_{epoch}.pt")
+
+        if stop_now:
+            print("[INFO] Running out of time, stop training now")
+            break
