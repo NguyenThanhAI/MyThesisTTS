@@ -273,7 +273,7 @@ if __name__ == "__main__":
                 "epoch": epoch,
                 "iteration": iteration}
         print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
-        torch.save(ckpt, f=f"{log_dir}/grad_{epoch}.pt")
+        torch.save(ckpt, f=f"{log_dir}/thesis_{epoch}.pt")
 
         if stop_now:
             print("[INFO] Running out of time, stop training now")
