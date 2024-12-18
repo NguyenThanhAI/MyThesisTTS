@@ -48,7 +48,7 @@ def text_to_sequence(text, cleaner_names=["english_cleaners"], dictionary=None):
                         sequence += _arpabet_to_sequence(t[1:-1])
                     else:
                         sequence += _symbols_to_sequence(t)
-                    sequence += space
+                    # sequence += space
             else:
                 sequence += _symbols_to_sequence(clean_text)
             break
