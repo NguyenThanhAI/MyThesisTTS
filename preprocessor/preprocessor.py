@@ -169,7 +169,8 @@ class Preprocessor:
         text = "{" + " ".join(phone) + "}"
         if start >= end:
             return None
-
+        print("==========================")
+        print(f"sum duration: {sum(duration)}")
         # Read and trim wav files
         wav, _ = librosa.load(wav_path)
         wav = wav[
@@ -187,13 +188,15 @@ class Preprocessor:
             frame_period=self.hop_length / self.sampling_rate * 1000,
         )
         pitch = pw.stonemask(wav.astype(np.float64), pitch, t, self.sampling_rate)
-
+        print(f"pitch shape: {pitch.shape}")
         pitch = pitch[: sum(duration)]
         if np.sum(pitch != 0) <= 1:
             return None
 
         # Compute mel-scale spectrogram and energy
         mel_spectrogram, energy = Audio.tools.get_mel_from_wav(wav, self.STFT)
+        print(f"melspectrogram shape: {mel_spectrogram.shape}")
+        print(f"energy shape: {energy.shape}")
         mel_spectrogram = mel_spectrogram[:, : sum(duration)]
         energy = energy[: sum(duration)]
 
