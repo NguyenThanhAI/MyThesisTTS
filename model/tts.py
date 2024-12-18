@@ -13,9 +13,13 @@ import torch
 
 from model import monotonic_align
 from model.base import BaseModule
-from model.text_encoder import TextEncoder
+from model.text_encoder import TextEncoder, UniversalTextFeatureEncoder
+from model.align_encoder import Aligner, ForwardSumLoss, BinLoss
+from model.variance_adaptor import VarianceAdaptor
 from model.diffusion import Diffusion
 from model.utils import sequence_mask, generate_path, duration_loss, fix_len_compatibility
+
+from model.loss import TotalLoss
 
 
 class GradTTS(BaseModule):
@@ -179,3 +183,189 @@ class GradTTS(BaseModule):
         prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
         
         return dur_loss, prior_loss, diff_loss
+
+
+
+class VarianceAdaptorGradTTS(BaseModule):
+    def __init__(self, n_vocab: int, n_enc_channels: int, filter_channels: int, 
+                 n_heads: int, n_enc_layers: int, enc_kernel: int, enc_dropout: int, window_size: int, 
+                 n_feats, dec_dim, beta_min, beta_max, pe_scale, stats_file_path,
+                 n_bins, pitch_feature_level, energy_feature_level,
+                 pitch_quantization, energy_quantization, variance_dims):
+        super(VarianceAdaptorGradTTS, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel = enc_kernel
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.n_feats = n_feats
+        self.dec_dim = dec_dim
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+        self.pe_scale = pe_scale
+        self.stats_file_path = stats_file_path
+        self.n_bins = n_bins
+        self.pitch_feature_level = pitch_feature_level
+        self.energy_feature_level = energy_feature_level
+        self.pitch_quantization = pitch_quantization
+        self.energy_quantization = energy_quantization
+        self.variance_dims = variance_dims
+
+
+        self.pre_encoder = UniversalTextFeatureEncoder(n_vocab=self.n_vocab,
+                                                       n_feats=self.n_enc_channels,
+                                                       n_channels=self.n_enc_channels,
+                                                       filter_channels=self.filter_channels,
+                                                       n_heads=self.n_heads,
+                                                       n_layers=self.n_enc_layers,
+                                                       kernel_size=self.enc_kernel,
+                                                       p_dropout=self.enc_dropout,
+                                                       window_size=self.window_size)
+        
+        self.post_encoder = UniversalTextFeatureEncoder(n_vocab=None,
+                                                        n_feats=self.n_feats,
+                                                        n_channels=self.n_enc_channels,
+                                                        filter_channels=self.filter_channels,
+                                                        n_heads=self.n_heads,
+                                                        n_layers=self.n_enc_layers,
+                                                        kernel_size=self.enc_kernel,
+                                                        p_dropout=self.enc_dropout,
+                                                        window_size=self.window_size)
+        
+        self.variance_adaptor = VarianceAdaptor(stats_file_path=self.stats_file_path,
+                                                in_channels=self.n_enc_channels,
+                                                filter_channels=self.filter_channels,
+                                                kernel_size=self.enc_kernel,
+                                                p_dropout=self.enc_dropout,
+                                                n_bins=self.n_bins,
+                                                pitch_feature_level=self.pitch_feature_level,
+                                                energy_feature_level=self.energy_feature_level,
+                                                pitch_quantization=self.pitch_quantization,
+                                                energy_quantization=self.energy_quantization,
+                                                variance_dims=self.n_enc_channels)
+        
+        self.decoder = Diffusion(n_feats=self.n_feats, 
+                                 dim=self.dec_dim, 
+                                 beta_min=self.beta_min, 
+                                 beta_max=self.beta_max, 
+                                 pe_scale=self.pe_scale)
+        
+        self.aligner = Aligner(in_dims=self.n_feats,
+                               hidden_dims=self.n_enc_channels,
+                               attn_channels=self.n_enc_channels,
+                               kernel_size=self.enc_kernel)
+
+        self.bin_loss = BinLoss()
+        self.forward_sum_loss = ForwardSumLoss()
+        self.loss = TotalLoss(pitch_feature_level=self.pitch_feature_level,
+                              energy_feature_level=self.energy_feature_level)
+    
+    @torch.no_grad
+    def forward(self, x, x_lengths, n_timesteps, temperature=1.0, stoc=False, length_scale=1.0):
+        """
+        Generates mel-spectrogram from text. Returns:
+            1. encoder outputs
+            2. decoder outputs
+            3. generated alignment
+        
+        Args:
+            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
+            x_lengths (torch.Tensor): lengths of texts in batch.
+            n_timesteps (int): number of steps to use for reverse diffusion in decoder.
+            temperature (float, optional): controls variance of terminal distribution.
+            stoc (bool, optional): flag that adds stochastic term to the decoder sampler.
+                Usually, does not provide synthesis improvements.
+            length_scale (float, optional): controls speech pace.
+                Increase value to slow down generated speech and vice versa.
+        """
+        x, x_lengths = self.relocate_input([x, x_lengths])
+
+        encoded_phonemes, x_mask = self.pre_encoder(x=x, x_lengths=x_lengths)
+        
+        encoded_phonemes_dp = encoded_phonemes.detach()
+
+        adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor(x=encoded_phonemes_dp, x_mask=x_mask)
+
+        w = torch.exp(input=log_duration_prediction) * x_mask
+        w_ceil = torch.ceil(input=w) * length_scale
+        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+        y_max_length = int(y_lengths.max())
+
+
+        mu_y, y_mask = self.post_encoder(x=adjusted_encoded_phonemes, x_lengths=y_lengths)
+
+        encoder_outputs = mu_y[:, :, :y_max_length]
+
+        # Sample latent representation from terminal distribution N(mu_y, I)
+        z = mu_y + torch.randn_like(input=mu_y, device=mu_y.device) / temperature
+        # Generate sample by performing reverse dynamics
+        decoder_outputs = self.decoder(z, y_mask, mu_y, n_timesteps, stoc, spk=None)
+        decoder_outputs = decoder_outputs[:, :, :y_max_length]
+
+        return encoder_outputs, decoder_outputs
+        
+
+    def compute_loss(self, x, x_lengths, y, y_lengths, pitch_target, energy_target, out_size=None):
+        """
+        Computes 7 losses:
+            1. duration loss: loss between predicted token durations and those extracted by Monotinic Alignment Search (MAS).
+            2. prior loss: loss between mel-spectrogram and encoder outputs.
+            3. diffusion loss: loss between gaussian noise and its reconstruction by diffusion-based decoder.
+            
+        Args:
+            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
+            x_lengths (torch.Tensor): lengths of texts in batch.
+            y (torch.Tensor): batch of corresponding mel-spectrograms.
+            y_lengths (torch.Tensor): lengths of mel-spectrograms in batch.
+            out_size (int, optional): length (in mel's sampling rate) of segment to cut, on which decoder will be trained.
+                Should be divisible by 2^{num of UNet downsamplings}. Needed to increase batch size.
+        """
+        x, x_lengths, y, y_lengths = self.relocate_input([x, x_lengths, y, y_lengths])
+
+        encoded_phonemes, x_mask = self.pre_encoder(x=x, x_lengths=x_lengths)
+        
+        encoded_phonemes_dp = encoded_phonemes.detach()
+
+        y_max_length = y.shape[-1]
+        y_mask = sequence_mask(length=y_lengths, max_length=y_max_length)
+        y_mask = y_mask.unsqueeze(1)
+
+        alignment_hard, alignment_soft, alignment_logprob, alignment_mask = self.aligner(x=encoded_phonemes_dp, x_mask=x_mask, y=y, y_mask=y_mask)
+        
+        alignment_length = torch.sum(alignment_hard, dim=1)
+
+        align_loss = self.forward_sum_loss(attn_logprob=alignment_logprob, phoneme_lens=x_lengths, mel_lens=y_lengths)
+
+        bin_loss = self.bin_loss(alignment_hard=alignment_mask.permute(0, 2, 1),
+                                 alignment_soft=alignment_soft.permute(0, 2, 1))
+
+        adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor(x=encoded_phonemes, 
+                                                                                                                                                     x_mask=x_mask,
+                                                                                                                                                     duration_target=alignment_hard,
+                                                                                                                                                     pitch_target=pitch_target,
+                                                                                                                                                     energy_target=energy_target)
+
+        mu_y, y_mask = self.post_encoder(x=adjusted_encoded_phonemes, x_lengths=y_lengths)
+
+
+
+        total_loss, mel_loss, pitch_loss, energy_loss, dur_loss = self.loss(x_lengths=x_lengths,
+                                                                            y_lengths=y_lengths,
+                                                                            mel_target=y,
+                                                                            pitch_target=pitch_target,
+                                                                            energy_target=energy_target,
+                                                                            duration_target=alignment_hard,
+                                                                            mel_prediction=mu_y,
+                                                                            pitch_prediction=pitch_prediction,
+                                                                            energy_prediction=energy_prediction,
+                                                                            log_duration_prediction=log_duration_prediction)
+        
+        # Compute loss of score-based decoder
+        diff_loss, xt = self.decoder.compute_loss(x0=y, mask=y_mask, mu=mu_y, spk=None)
+        
+        large_total_loss = 1e-2 * align_loss + bin_loss + diff_loss + total_loss
+        
+        return large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, align_loss, bin_loss, diff_loss
