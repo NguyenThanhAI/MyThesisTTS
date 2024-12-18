@@ -1,6 +1,7 @@
 """ from https://github.com/jaywalnut310/glow-tts """
 
 import torch
+import torch.nn.functional as F
 
 
 def sequence_mask(length, max_length=None):
@@ -42,6 +43,27 @@ def generate_path(duration, mask):
 def duration_loss(logw, logw_, lengths):
     loss = torch.sum((logw - logw_)**2) / torch.sum(lengths)
     return loss
+
+
+def pad(input_ele, mel_max_length=None):
+    if mel_max_length:
+        max_len = mel_max_length
+    else:
+        max_len = max([input_ele[i].size(1) for i in range(len(input_ele))])
+
+    out_list = list()
+    for i, batch in enumerate(input_ele):
+        if len(batch.shape) == 1:
+            one_batch_padded = F.pad(
+                batch, (0, max_len - batch.size(0)), "constant", 0.0
+            )
+        elif len(batch.shape) == 2:
+            one_batch_padded = F.pad(
+                batch, (0, max_len - batch.size(1), 0, 0), "constant", 0.0
+            )
+        out_list.append(one_batch_padded)
+    out_padded = torch.stack(out_list)
+    return out_padded
 
 
 if __name__ == "__main__":
