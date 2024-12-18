@@ -46,6 +46,8 @@ def lowercase(text):
 def collapse_whitespace(text):
     return re.sub(_whitespace_re, ' ', text)
 
+def remove_punctuation(text):
+    return re.sub(r'[.,:;!?]', '', text)
 
 def convert_to_ascii(text):
     return unidecode(text)
@@ -70,6 +72,7 @@ def english_cleaners(text):
     text = expand_numbers(text)
     text = expand_abbreviations(text)
     text = collapse_whitespace(text)
+    text = remove_punctuation(text)
     return text
 
 if __name__ == "__main__":
