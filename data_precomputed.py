@@ -49,11 +49,18 @@ class PrecomputedTextMelDurPitchDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.info_file_content)
     
+    def sample_test_batch(self, size):
+        idx = np.random.choice(range(len(self)), size=size, replace=False)
+        test_batch = []
+        for index in idx:
+            test_batch.append(self.__getitem__(index))
+        return test_batch
+    
 
 class PrecomputedTextMelDurPitchBatchCollate(object):
     def __call__(self, batch):
         B = len(batch)
-        print(batch)
+        # print(batch)
         y_max_length = max([item["y"].shape[-1] for item in batch])
         y_max_length = fix_len_compatibility(y_max_length)
         x_max_length = max([item["x"].shape[-1] for item in batch])
