@@ -340,4 +340,71 @@ class TextEncoder(BaseModule):
         logw = self.proj_w(x_dp, x_mask)
 
         return mu, logw, x_mask
+
+
+
+class UniversalTextFeatureEncoder(BaseModule):
+    def __init__(self, n_vocab, n_feats, 
+                 n_channels, filter_channels, n_heads, 
+                 n_layers, kernel_size, 
+                 p_dropout, window_size=None):
+        
+        super(UniversalTextFeatureEncoder, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_channels = n_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+        self.window_size = window_size
+
+        if self.n_vocab is not None:
+            self.emb = torch.nn.Embedding(num_embeddings=n_vocab, embedding_dim=n_channels)
+            torch.nn.init.normal_(tensor=self.emb.weight, mean=0.0, std=n_channels**-0.5)
+        else:
+            self.emb = None
+
+        self.pos_emb = SinusoidalPositionalEncoding(dim=n_channels)
+
+        self.prenet = ConvReluNorm(in_channels=n_channels, 
+                                   hidden_channels=n_channels, 
+                                   out_channels=n_channels, 
+                                   kernel_size=5, 
+                                   n_layers=3, 
+                                   p_dropout=0.5)
+        
+
+        self.encoder = Encoder(hidden_channels=n_channels, 
+                               filter_channels=filter_channels, 
+                               n_heads=n_heads, 
+                               n_layers=n_layers, 
+                               kernel_size=kernel_size, 
+                               p_dropout=p_dropout, 
+                               window_size=window_size)
+        
+        self.proj_m = torch.nn.Conv1d(in_channels=n_channels, 
+                                      out_channels=n_feats, 
+                                      kernel_size=1)
+        
+    def forward(self, x, x_lengths):
+        if self.emb is not None:
+            x = self.emb(x) * math.sqrt(self.n_channels)
+            x = self.pos_emb(x)
+            x = torch.transpose(x, 1, -1)
+        else:
+            x = torch.transpose(x, 1, -1)
+            x = self.pos_emb(x)
+            x = torch.transpose(x, 1, -1)
+
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
+        x = self.prenet(x, x_mask)
+
+        x = self.encoder(x, x_mask)
+
+        out = self.proj_m(x) * x_mask
+
+        return out, x_mask
     
