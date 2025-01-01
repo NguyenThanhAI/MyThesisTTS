@@ -46,7 +46,7 @@ def get_args():
     parser.add_argument("--n_epochs", type=int, default=params.n_epochs)
     parser.add_argument("--batch_size", type=int, default=params.batch_size)
     parser.add_argument("--out_size", type=int, default=params.out_size)
-    parser.add_argument("--learning_rate", type=float, default=1e-1)
+    parser.add_argument("--learning_rate", type=float, default=params.learning_rate)
     parser.add_argument("--random_seed", type=int, default=params.seed)
     # parser.add_argument("nsymbols", type=int, default=len(symbols))
     parser.add_argument("--n_enc_channels", type=int, default=params.n_enc_channels)
@@ -192,7 +192,6 @@ if __name__ == "__main__":
     
     print("Number of pre-encoder parameters: %.2fm" % (model.pre_encoder.nparams/1e6))
     print("Number of post-encoder parameters: %.2fm" % (model.post_encoder.nparams/1e6))
-    print("Number of aligner parameters: %.2fm" % (model.aligner.nparams/1e6))
     print("Number of variance adaptor parameters: %.2fm" % (model.variance_adaptor.nparams/1e6))
     print("Number of decoder parameters: %.2fm" % (model.decoder.nparams/1e6))
     print("Total parameters: %.2fm" % (model.nparams/1e6))
@@ -228,39 +227,40 @@ if __name__ == "__main__":
         dur_losses = []
         prior_losses = []
         diff_losses = []
-        bin_losses = []
-        forward_sum_losses = []
         pitch_losses = []
         energy_losses = []
 
         with tqdm(train_loader, total=len(train_dataset)//batch_size) as progress_bar:
             for batch_idx, batch in enumerate(progress_bar):
-                model.zero_grad()
+                # model.zero_grad()
+                optimizer.zero_grad()
                 x, x_lengths = batch["x"].to(device=device), batch["x_lengths"].to(device=device)
                 y, y_lengths = batch["y"].to(device=device), batch["y_lengths"].to(device=device)
-                pitch_target, energy_target = batch["pitch"].to(device=device), batch["energy"].to(device=device)
+                duration_target, pitch_target, energy_target = batch["duration"].to(device=device), batch["pitch"].to(device=device), batch["energy"].to(device=device)
 
-                large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, align_loss, bin_loss, diff_loss = model.compute_loss(x=x,
-                                                                                                                                    x_lengths=x_lengths,
-                                                                                                                                    y=y,
-                                                                                                                                    y_lengths=y_lengths,
-                                                                                                                                    pitch_target=pitch_target,
-                                                                                                                                    energy_target=energy_target,
-                                                                                                                                    out_size=out_size)
+                large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, diff_loss = model.compute_loss(x=x,
+                                                                                                              x_lengths=x_lengths,
+                                                                                                              y=y,
+                                                                                                              y_lengths=y_lengths,
+                                                                                                              duration_target=duration_target,
+                                                                                                              pitch_target=pitch_target,
+                                                                                                              energy_target=energy_target,
+                                                                                                              out_size=out_size)
                 
-                loss = sum([mel_loss, pitch_loss, energy_loss, dur_loss, align_loss, bin_loss, diff_loss])
+                loss = sum([mel_loss, pitch_loss, energy_loss, dur_loss, diff_loss])
 
                 # assert torch.abs(loss - large_total_loss).cpu().numpy() < 1e-5
                 loss.backward()
+                
+                # print("======================================")
+                # for name, param in model.named_parameters():
+                #     print(name, param.grad)
 
                 pre_enc_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.pre_encoder.parameters(),
                                                                    max_norm=1)
                 
                 post_enc_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.post_encoder.parameters(),
                                                                     max_norm=1)
-                
-                aligner_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.aligner.parameters(),
-                                                                   max_norm=1)
                 
                 variance_adaptor_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.variance_adaptor.parameters(),
                                                                             max_norm=1)
@@ -280,15 +280,9 @@ if __name__ == "__main__":
                                   global_step=iteration)
                 logger.add_scalar("training/energy_loss", energy_loss.item(),
                                   global_step=iteration)
-                logger.add_scalar("training/bin_loss", bin_loss.item(),
-                                  global_step=iteration)
-                logger.add_scalar("training/forward_sum_loss", align_loss.item(),
-                                  global_step=iteration)
                 logger.add_scalar("training/pre_encoder_grad_norm", pre_enc_grad_norm,
                                   global_step=iteration)
                 logger.add_scalar("training/post_encoder_grad_norm", post_enc_grad_norm,
-                                  global_step=iteration)
-                logger.add_scalar("training/aligner_grad_norm", aligner_grad_norm,
                                   global_step=iteration)
                 logger.add_scalar("training/variance_adaptor_grad_norm", variance_adaptor_grad_norm,
                                   global_step=iteration)
@@ -300,11 +294,10 @@ if __name__ == "__main__":
                 pitch_losses.append(pitch_loss.item())
                 energy_losses.append(energy_loss.item())
                 diff_losses.append(diff_loss.item())
-                bin_losses.append(bin_loss.item())
-                forward_sum_losses.append(align_loss.item())
 
-                if batch_idx % 5 == 0:
-                    msg = f"Epoch: {epoch}, iteration: {iteration}\nduration loss: {dur_loss.item()}, mel loss: {mel_loss.item()}\npitch loss: {pitch_loss.item()}, energy loss: {energy_loss.item()}\n bin loss: {bin_loss.item()}, forward sum loss: {align_loss.item()}\ndiff loss: {diff_loss.item()}"
+                if batch_idx % 1 == 0:
+                    msg = f"Epoch: {epoch}, iteration: {iteration} duration loss: {dur_loss.item():.3f}, mel loss: {mel_loss.item():.3f} pitch loss: {pitch_loss.item():.3f}, energy loss: {energy_loss.item():.3f} diff loss: {diff_loss.item():.3f}"
+                    # print(msg)
                     progress_bar.set_description(msg)
 
                 iteration += 1
@@ -313,8 +306,6 @@ if __name__ == "__main__":
         log_msg += "| mel loss = %.3f" % np.mean(prior_losses)
         log_msg += "| pitch loss = %.3f" % np.mean(pitch_losses)
         log_msg += "| energy loss = %.3f" % np.mean(energy_losses)
-        log_msg += "| bin loss = %.3f" % np.mean(bin_losses)
-        log_msg += "forward sum loss = %.3f" % np.mean(forward_sum_losses)
         log_msg += "diffusion loss = %.3f" % np.mean(diff_losses)
 
         with open(os.path.join(log_dir, "train.log"), "a") as f:

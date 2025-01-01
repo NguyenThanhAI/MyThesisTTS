@@ -55,10 +55,10 @@ out_size = fix_len_compatibility(2*22050//256)
 
 data_dir = r"D:\TTS_Preprocessed"
 dataset_name = "LJSpeech"
-pitch_feature_level = "frame_level"
-pitch_quantization = "linear"
-energy_feature_level = "frame_level"
-energy_quantization = "linear"
+pitch_feature_level = "phoneme_level"
+pitch_quantization = "log"
+energy_feature_level = "phoneme_level"
+energy_quantization = "log"
 variance_dims = 256
 stats_file_path = r"D:\TTS_Preprocessed\LJSpeech\stats.json"
 n_bins = 256

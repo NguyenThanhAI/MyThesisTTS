@@ -219,6 +219,7 @@ class VarianceAdaptor(BaseModule):
     def forward(self,
                 x: torch.Tensor,
                 x_mask: torch.Tensor,
+                y_max_length: torch.Tensor=None,
                 duration_target: torch.Tensor=None,
                 pitch_target: torch.Tensor=None,
                 energy_target: torch.Tensor=None,
@@ -226,28 +227,27 @@ class VarianceAdaptor(BaseModule):
                 p_control: float=1.0,
                 e_control: float=1.0):
         
-        x_dp = torch.detach(x)
-        log_duration_prediction = self.duration_predictor(x=x_dp, x_mask=x_mask)
+        # x_dp = x.detach()
+        input_variance_adaptor = x.detach() + 0.1 * (x - x.detach())
+        log_duration_prediction = self.duration_predictor(x=input_variance_adaptor, x_mask=x_mask)
         duration_rounded = torch.clamp((torch.ceil(torch.exp(log_duration_prediction)) * d_control), min=0)
-         
         if self.pitch_feature_level == "phoneme_level":
-            x_dp = torch.detach(x)
-            pitch_prediction, pitch_embedding = self.get_pitch_embedding(x=x_dp, 
+            # x_dp = x.detach()
+            pitch_prediction, pitch_embedding = self.get_pitch_embedding(input_variance_adaptor,#x=x, 
                                                                          x_mask=x_mask,
                                                                          target=pitch_target, 
                                                                          control=p_control)
             x = x + pitch_embedding
 
         if self.energy_feature_level == "phoneme_level":
-            x_dp = torch.detach(x)
-            energy_prediction, energy_embedding = self.get_energy_embedding(x=x_dp, 
+            # x_dp = x.detach()
+            energy_prediction, energy_embedding = self.get_energy_embedding(input_variance_adaptor,#x=x, 
                                                                             x_mask=x_mask,
                                                                             target=energy_target, 
                                                                             control=e_control)
             x = x + energy_embedding
 
-        if duration_target is not None:
-            y_max_length = pitch_target.shape[-1]
+        if y_max_length is not None:
             sum_duration_target = torch.sum(duration_target, dim=1)
             y_mask = sequence_mask(length=sum_duration_target, max_length=y_max_length)
             x, y_lengths = self.length_regulator(x=x, 
@@ -260,21 +260,22 @@ class VarianceAdaptor(BaseModule):
 
 
         
-        if duration_target is None:
+        if y_max_length is None:
             y_max_length = fix_len_compatibility(length=y_lengths)
-            y_mask = sequence_mask(length=y_lengths)
+            y_mask = sequence_mask(length=y_lengths, max_length=y_max_length)
         y_mask = y_mask.unsqueeze(1)
+        input_variance_adaptor = x.detach() + 0.1 * (x - x.detach())
         if self.pitch_feature_level == "frame_level":
-            x_dp = torch.detach(x)
-            pitch_prediction, pitch_embedding = self.get_pitch_embedding(x=x_dp, 
+            # x_dp = x.detach()
+            pitch_prediction, pitch_embedding = self.get_pitch_embedding(input_variance_adaptor,#x=x, 
                                                                          x_mask=y_mask,
                                                                          target=pitch_target, 
                                                                          control=p_control)
             x = x + pitch_embedding
 
         if self.energy_feature_level == "frame_level":
-            x_dp = torch.detach(x)
-            energy_prediction, energy_embedding = self.get_energy_embedding(x=x_dp,
+            # x_dp = x.detach()
+            energy_prediction, energy_embedding = self.get_energy_embedding(input_variance_adaptor,#x=x,
                                                                             x_mask=y_mask,
                                                                             target=energy_target,
                                                                             control=e_control)

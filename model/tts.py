@@ -253,13 +253,6 @@ class VarianceAdaptorGradTTS(BaseModule):
                                  beta_max=self.beta_max, 
                                  pe_scale=self.pe_scale)
         
-        self.aligner = Aligner(in_dims=self.n_feats,
-                               hidden_dims=self.n_enc_channels,
-                               attn_channels=self.n_enc_channels,
-                               kernel_size=self.enc_kernel)
-
-        self.bin_loss = BinLoss()
-        self.forward_sum_loss = ForwardSumLoss()
         self.loss = TotalLoss(pitch_feature_level=self.pitch_feature_level,
                               energy_feature_level=self.energy_feature_level)
     
@@ -308,7 +301,7 @@ class VarianceAdaptorGradTTS(BaseModule):
         return encoder_outputs, decoder_outputs
         
 
-    def compute_loss(self, x, x_lengths, y, y_lengths, pitch_target, energy_target, out_size=None):
+    def compute_loss(self, x, x_lengths, y, y_lengths, duration_target, pitch_target, energy_target, out_size=None):
         """
         Computes 7 losses:
             1. duration loss: loss between predicted token durations and those extracted by Monotinic Alignment Search (MAS).
@@ -327,24 +320,16 @@ class VarianceAdaptorGradTTS(BaseModule):
 
         encoded_phonemes, x_mask = self.pre_encoder(x=x, x_lengths=x_lengths)
         
-        encoded_phonemes_dp = encoded_phonemes.detach()
+        # encoded_phonemes_dp = encoded_phonemes.detach()
 
         y_max_length = y.shape[-1]
         y_mask = sequence_mask(length=y_lengths, max_length=y_max_length)
         y_mask = y_mask.unsqueeze(1)
 
-        alignment_hard, alignment_soft, alignment_logprob, alignment_mask = self.aligner(x=encoded_phonemes_dp, x_mask=x_mask, y=y, y_mask=y_mask)
-        
-        alignment_length = torch.sum(alignment_hard, dim=1)
-
-        align_loss = self.forward_sum_loss(attn_logprob=alignment_logprob, phoneme_lens=x_lengths, mel_lens=y_lengths)
-
-        bin_loss = self.bin_loss(alignment_hard=alignment_mask.permute(0, 2, 1),
-                                 alignment_soft=alignment_soft.permute(0, 2, 1))
-
         adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor(x=encoded_phonemes, 
                                                                                                                                                      x_mask=x_mask,
-                                                                                                                                                     duration_target=alignment_hard,
+                                                                                                                                                     y_max_length=y_max_length,
+                                                                                                                                                     duration_target=duration_target,
                                                                                                                                                      pitch_target=pitch_target,
                                                                                                                                                      energy_target=energy_target)
 
@@ -357,7 +342,7 @@ class VarianceAdaptorGradTTS(BaseModule):
                                                                             mel_target=y,
                                                                             pitch_target=pitch_target,
                                                                             energy_target=energy_target,
-                                                                            duration_target=alignment_hard,
+                                                                            duration_target=duration_target,
                                                                             mel_prediction=mu_y,
                                                                             pitch_prediction=pitch_prediction,
                                                                             energy_prediction=energy_prediction,
@@ -366,6 +351,6 @@ class VarianceAdaptorGradTTS(BaseModule):
         # Compute loss of score-based decoder
         diff_loss, xt = self.decoder.compute_loss(x0=y, mask=y_mask, mu=mu_y, spk=None)
         
-        large_total_loss = 1e-2 * align_loss + bin_loss + diff_loss + total_loss
+        large_total_loss = diff_loss + total_loss
         
-        return large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, align_loss, bin_loss, diff_loss
+        return large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, diff_loss

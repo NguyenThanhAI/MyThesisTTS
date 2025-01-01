@@ -30,9 +30,12 @@ class PrecomputedTextMelDurPitchDataset(torch.utils.data.Dataset):
         phoneme_sequence = element_info["script"]
         phoneme_sequence = torch.IntTensor(phoneme_sequence)
         file_name = element_info["file"]
+        duration_path = os.path.join(self.data_dir, self.dataset_name, "duration", "{}.npy".format(os.path.splitext(file_name)[0]))
         mel_path = os.path.join(self.data_dir, self.dataset_name, "mel", "{}.npy".format(os.path.splitext(file_name)[0]))
         pitch_path = os.path.join(self.data_dir, self.dataset_name, "pitch", "{}.npy".format(os.path.splitext(file_name)[0]))
         energy_path = os.path.join(self.data_dir, self.dataset_name, "energy", "{}.npy".format(os.path.splitext(file_name)[0]))
+        duration = np.load(duration_path)
+        duration = torch.FloatTensor(duration)
         mel = np.load(mel_path)
         mel = torch.FloatTensor(mel)
         pitch = np.load(pitch_path)
@@ -40,9 +43,9 @@ class PrecomputedTextMelDurPitchDataset(torch.utils.data.Dataset):
         energy = np.load(energy_path)
         energy = torch.FloatTensor(energy)
 
-        assert mel.shape[1] == pitch.shape[0] and pitch.shape[0] == energy.shape[0]
+        assert pitch.shape[0] == energy.shape[0]
 
-        item = {"x": phoneme_sequence, "y": mel, "pitch": pitch, "energy": energy}
+        item = {"x": phoneme_sequence, "y": mel, "duration": duration, "pitch": pitch, "energy": energy}
 
         return item
 
@@ -68,13 +71,14 @@ class PrecomputedTextMelDurPitchBatchCollate(object):
 
         y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
         x = torch.zeros((B, x_max_length), dtype=torch.long)
-        pitch = torch.zeros((B, 1, y_max_length), dtype=torch.float32)
-        energy = torch.zeros((B, 1, y_max_length), dtype=torch.float32)
+        duration = torch.zeros((B, x_max_length), dtype=torch.float32)
+        pitch = torch.zeros((B, 1, x_max_length), dtype=torch.float32)
+        energy = torch.zeros((B, 1, x_max_length), dtype=torch.float32)
 
         y_lengths, x_lengths = [], []
 
         for i, item in enumerate(batch):
-            y_, x_, pitch_, energy_ = item["y"], item["x"], item["pitch"], item["energy"]
+            y_, x_, duration_, pitch_, energy_ = item["y"], item["x"], item["duration"], item["pitch"], item["energy"]
             
             y_lengths.append(y_.shape[-1])
             x_lengths.append(x_.shape[-1])
@@ -82,6 +86,7 @@ class PrecomputedTextMelDurPitchBatchCollate(object):
             y[i, :, :y_.shape[-1]] = y_
             x[i, :x_.shape[-1]] = x_
 
+            duration[i, :duration_.shape[-1]] = duration_
             pitch[i, 0, :pitch_.shape[-1]] = pitch_
             energy[i, 0, :energy_.shape[-1]] = energy_
 
@@ -89,7 +94,8 @@ class PrecomputedTextMelDurPitchBatchCollate(object):
         x_lengths = torch.LongTensor(x_lengths)
 
         return {"x": x, "x_lengths": x_lengths, 
-                "y": y, "y_lengths": y_lengths, 
+                "y": y, "y_lengths": y_lengths,
+                "duration": duration, 
                 "pitch": pitch, "energy": energy}
 
 
