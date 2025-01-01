@@ -68,7 +68,7 @@ class TotalLoss(BaseModule):
         else:
             energy_loss = mse_loss(target=energy_target, prediction=energy_prediction, mask=y_mask)
 
-        log_duration_target = torch.log(1e-8 + duration_target)
+        log_duration_target = torch.log(1e-8 + duration_target).unsqueeze(1)
 
         duration_loss = mse_loss(target=log_duration_target, prediction=log_duration_prediction, mask=x_mask)
 
