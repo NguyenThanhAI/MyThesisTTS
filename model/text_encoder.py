@@ -5,7 +5,7 @@ import math
 import torch
 
 from model.base import BaseModule, LayerNorm, SinusoidalPositionalEncoding
-from model.utils import sequence_mask, convert_pad_shape
+from model.utils import sequence_mask, convert_pad_shape, fix_len_compatibility
     
 
 class ConvReluNorm(BaseModule):
@@ -393,12 +393,14 @@ class UniversalTextFeatureEncoder(BaseModule):
             x = self.emb(x) * math.sqrt(self.n_channels)
             x = self.pos_emb(x)
             x = torch.transpose(x, 1, -1)
+            x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
         else:
             x = torch.transpose(x, 1, -1)
             x = self.pos_emb(x)
             x = torch.transpose(x, 1, -1)
-
-        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+            y_max_length = int(x_lengths.max())
+            y_max_length_ = fix_len_compatibility(length=y_max_length)
+            x_mask = torch.unsqueeze(sequence_mask(x_lengths, y_max_length_), 1).to(x.dtype)
 
         x = self.prenet(x, x_mask)
 

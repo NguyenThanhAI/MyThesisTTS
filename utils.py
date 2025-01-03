@@ -10,7 +10,8 @@ import os
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-
+import matplotlib
+matplotlib.use("Agg")
 import pandas as pd
 
 import torch

@@ -302,6 +302,9 @@ if __name__ == "__main__":
 
                 iteration += 1
 
+                # if iteration >= 1:
+                #     break
+
         log_msg = "Epoch %d, duration loss = %.3f" % (epoch, np.mean(dur_losses))
         log_msg += "| mel loss = %.3f" % np.mean(prior_losses)
         log_msg += "| pitch loss = %.3f" % np.mean(pitch_losses)

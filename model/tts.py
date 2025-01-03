@@ -282,9 +282,9 @@ class VarianceAdaptorGradTTS(BaseModule):
 
         adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor(x=encoded_phonemes_dp, x_mask=x_mask)
 
-        w = torch.exp(input=log_duration_prediction) * x_mask
-        w_ceil = torch.ceil(input=w) * length_scale
-        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+        # w = torch.exp(input=log_duration_prediction) * x_mask
+        # w_ceil = torch.ceil(input=w) * length_scale
+        # y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_max_length = int(y_lengths.max())
 
 

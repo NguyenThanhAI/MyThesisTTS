@@ -230,7 +230,8 @@ class VarianceAdaptor(BaseModule):
         # x_dp = x.detach()
         input_variance_adaptor = x.detach() + 0.1 * (x - x.detach())
         log_duration_prediction = self.duration_predictor(x=input_variance_adaptor, x_mask=x_mask)
-        duration_rounded = torch.clamp((torch.ceil(torch.exp(log_duration_prediction)) * d_control), min=0)
+        duration_rounded = torch.clamp((torch.ceil(torch.exp(log_duration_prediction)) * d_control), min=1)
+        duration_rounded = duration_rounded.squeeze(1)
         if self.pitch_feature_level == "phoneme_level":
             # x_dp = x.detach()
             pitch_prediction, pitch_embedding = self.get_pitch_embedding(input_variance_adaptor,#x=x, 
@@ -255,14 +256,16 @@ class VarianceAdaptor(BaseModule):
                                                  max_len=y_max_length)
             
         else:
+            duration_sum = torch.sum(duration_rounded, dim=1).long()
+            y_max_length = int(duration_sum.max())
+            y_max_length_ = fix_len_compatibility(length=y_max_length)
             x, y_lengths = self.length_regulator(x=x, 
-                                                 duration=duration_rounded)
-
+                                                 duration=duration_rounded,
+                                                 max_len=y_max_length_)
+            y_mask = sequence_mask(length=y_lengths, max_length=y_max_length_)
 
         
-        if y_max_length is None:
-            y_max_length = fix_len_compatibility(length=y_lengths)
-            y_mask = sequence_mask(length=y_lengths, max_length=y_max_length)
+
         y_mask = y_mask.unsqueeze(1)
         input_variance_adaptor = x.detach() + 0.1 * (x - x.detach())
         if self.pitch_feature_level == "frame_level":
