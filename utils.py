@@ -8,6 +8,7 @@
 
 import os
 import glob
+from typing import Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
@@ -69,26 +70,57 @@ def save_figure_to_numpy(fig):
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     return data
 
-
-def plot_tensor(tensor):
+def plot_mel(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
+    pitch_min, pitch_max, energy_min, energy_max = stats
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(12, 3))
     im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
     plt.colorbar(im, ax=ax)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Mel-Spectrogram")
+
+    # Tạo trục phụ để vẽ pitch
+    ax_pitch = ax.twinx()
+    ax_pitch.plot(pitch_predict, color="tomato", label="Pitch")
+    ax_pitch.set_ylim(pitch_min, pitch_max)
+    ax_pitch.set_ylabel("Pitch (F0)", color="tomato")
+    ax_pitch.tick_params(axis="y", labelcolor="tomato")
+
+    ax_energy = ax.twinx()
+    ax_energy.spines["right"].set_position(("outward", 60))  # Đẩy trục energy ra ngoài
+    ax_energy.plot(energy_predict, color="darkviolet", label="Energy")
+    ax_energy.set_ylim(energy_min, energy_max)
+    ax_energy.set_ylabel("Energy", color="darkviolet")
+    ax_energy.tick_params(axis="y", labelcolor="darkviolet")
+
     plt.tight_layout()
     fig.canvas.draw()
-    data = save_figure_to_numpy(fig)
     plt.close()
+
+    return fig
+
+
+def plot_tensor(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
+    fig = plot_mel(tensor=tensor, 
+                   pitch_predict=pitch_predict,
+                   energy_predict=energy_predict,
+                   stats=stats)
+    data = save_figure_to_numpy(fig)
     return data
 
 
-def save_plot(tensor, savepath):
-    plt.style.use('default')
-    fig, ax = plt.subplots(figsize=(12, 3))
-    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
-    plt.colorbar(im, ax=ax)
-    plt.tight_layout()
-    fig.canvas.draw()
-    plt.savefig(savepath)
-    plt.close()
+def save_plot(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float], savepath):
+    fig = plot_mel(tensor=tensor, 
+                   pitch_predict=pitch_predict,
+                   energy_predict=energy_predict,
+                   stats=stats)
+    fig.savefig(savepath)
     return
+
+
+def expand(values, durations):
+    out = list()
+    for value, d in zip(values, durations):
+        out += [value] * max(0, int(d))
+    return np.array(out)

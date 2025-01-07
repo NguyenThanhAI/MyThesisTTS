@@ -298,7 +298,7 @@ class VarianceAdaptorGradTTS(BaseModule):
         decoder_outputs = self.decoder(z, y_mask, mu_y, n_timesteps, stoc, spk=None)
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
-        return encoder_outputs, decoder_outputs
+        return encoder_outputs, decoder_outputs, pitch_prediction, energy_prediction, duration_rounded
         
 
     def compute_loss(self, x, x_lengths, y, y_lengths, duration_target, pitch_target, energy_target, out_size=None):

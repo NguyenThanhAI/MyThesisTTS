@@ -1,6 +1,7 @@
 import os
 
 import argparse
+import json
 
 from copy import deepcopy
 
@@ -9,14 +10,14 @@ import numpy as np
 from tqdm import tqdm
 
 import torch
-
+from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 import params
 from model import VarianceAdaptorGradTTS
 from data_precomputed import PrecomputedTextMelDurPitchDataset, PrecomputedTextMelDurPitchBatchCollate
-from utils import plot_tensor, save_plot
+from utils import plot_tensor, save_plot, expand
 from text.symbols import symbols
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -190,6 +191,13 @@ if __name__ == "__main__":
                                    stats_file_path=stats_file_path,
                                    n_bins=n_bins).to(device=device)
     
+    with open(stats_file_path, "r") as f:
+        stats = json.load(f)
+        pitch_min = stats["pitch"]["min"]
+        pitch_max = stats["pitch"]["max"]
+        energy_min = stats["energy"]["min"]
+        energy_max = stats["energy"]["max"]
+    
     print("Number of pre-encoder parameters: %.2fm" % (model.pre_encoder.nparams/1e6))
     print("Number of post-encoder parameters: %.2fm" % (model.post_encoder.nparams/1e6))
     print("Number of variance adaptor parameters: %.2fm" % (model.variance_adaptor.nparams/1e6))
@@ -215,9 +223,27 @@ if __name__ == "__main__":
     test_batch = test_dataset.sample_test_batch(size=params.test_size)
     for i, item in enumerate(test_batch):
         mel = item["y"]
-        logger.add_image(f"image_{i}/ground_truth", plot_tensor(mel.squeeze()),
+        duration_target, pitch_target, energy_target = item["duration"], item["pitch"], item["energy"]
+        if pitch_feature_level == "phoneme_level":
+            pitch_predict = expand(pitch_target.squeeze().numpy(), durations=duration_target.squeeze().numpy())
+        elif pitch_feature_level == "frame_level":
+            pitch_predict = pitch_target.squeeze().numpy()
+        
+        if energy_feature_level == "phoneme_level":
+            energy_predict = expand(energy_target.squeeze().numpy(), durations=duration_target.squeeze().numpy())
+        elif energy_feature_level == "frame_level":
+            energy_predict = energy_target.squeeze().numpy()
+
+        logger.add_image(f"image_{i}/ground_truth", plot_tensor(tensor=mel.squeeze(),
+                                                                pitch_predict=pitch_predict,
+                                                                energy_predict=energy_predict, 
+                                                                stats=(pitch_min, pitch_max, energy_min, energy_max)),
                          global_step=0, dataformats="HWC")
-        save_plot(mel.squeeze(), f"{log_dir}/original_{i}.png")
+        save_plot(tensor=mel.squeeze(),
+                  pitch_predict=pitch_predict,
+                  energy_predict=energy_predict, 
+                  stats=(pitch_min, pitch_max, energy_min, energy_max),
+                  savepath=f"{log_dir}/original_{i}.png")
 
     print("Start training...")
 
@@ -331,19 +357,40 @@ if __name__ == "__main__":
             for i, item in enumerate(test_batch):
                 x = item["x"].to(torch.long).unsqueeze(0).to(device=device)
                 x_lengths = torch.LongTensor([x.shape[-1]]).to(device=device)
-                y_enc, y_dec = model(x=x,
-                                     x_lengths=x_lengths,
-                                     n_timesteps=50)
+                y_enc, y_dec, pitch_prediction, energy_prediction, duration_prediction = model(x=x,
+                                                                                               x_lengths=x_lengths,
+                                                                                               n_timesteps=50)
+                if pitch_feature_level == "phoneme_level":
+                    pitch_predict = expand(pitch_prediction.squeeze().cpu().numpy(), durations=duration_prediction.squeeze().cpu().numpy())
+                elif pitch_feature_level == "frame_level":
+                    pitch_predict = pitch_prediction.squeeze().cpu().numpy()
+
+                if energy_feature_level == "phoneme_level":
+                    energy_predict = expand(energy_prediction.squeeze().cpu().numpy(), durations=duration_prediction.squeeze().cpu().numpy())
+                elif energy_feature_level == "frame_level":
+                    energy_predict = energy_prediction.squeeze().cpu().numpy()
                 logger.add_image(f"image_{i}/generated_enc",
-                                 plot_tensor(y_enc.squeeze().cpu()),
+                                 plot_tensor(tensor=y_enc.squeeze().cpu().numpy(), 
+                                             pitch_predict=pitch_predict,
+                                             energy_predict=energy_predict,
+                                             stats=(pitch_min, pitch_max, energy_min, energy_max)),
                                  global_step=iteration, dataformats="HWC")
                 logger.add_image(f"image_{i}/generated_dec",
-                                 plot_tensor(y_dec.squeeze().cpu()),
+                                 plot_tensor(tensor=y_dec.squeeze().cpu().numpy(), 
+                                             pitch_predict=pitch_predict,
+                                             energy_predict=energy_predict,
+                                             stats=(pitch_min, pitch_max, energy_min, energy_max)),
                                  global_step=iteration, dataformats="HWC")
-                save_plot(y_enc.squeeze().cpu(), 
-                          os.path.join(log_dir, f"generated_enc_{i}.png"))
-                save_plot(y_dec.squeeze().cpu(), 
-                          os.path.join(log_dir, f"generated_dec_{i}.png"))
+                save_plot(tensor=y_enc.squeeze().cpu().numpy(),
+                          pitch_predict=pitch_predict,
+                          energy_predict=energy_predict,
+                          stats=(pitch_min, pitch_max, energy_min, energy_max),
+                          savepath=os.path.join(log_dir, f"generated_enc_{i}.png"))
+                save_plot(tensor=y_dec.squeeze().cpu().numpy(),
+                          pitch_predict=pitch_predict,
+                          energy_predict=energy_predict,
+                          stats=(pitch_min, pitch_max, energy_min, energy_max),
+                          savepath=os.path.join(log_dir, f"generated_dec_{i}.png"))
                 
         ckpt = {"model_state_dict": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
