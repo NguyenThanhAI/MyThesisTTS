@@ -27,6 +27,8 @@ from text.symbols import symbols
 from utils import intersperse
 from meldataset import mel_spectrogram, mel_spectrogram_and_energy
 
+from pitch_utils import get_pitch, get_cont_lf0, get_lf0_cwt
+
 np.random.seed(42)
 
 
@@ -51,7 +53,9 @@ class Preprocessor:
                  energy_phoneme_averaging: bool=True,
                  pitch_normalization: bool=True,
                  energy_normalization: bool=True,
-                 cmudict_path="resources/cmu_dictionary") -> None:
+                 cmudict_path="resources/cmu_dictionary",
+                 with_f0: bool=True,
+                 with_f0_cwt: bool=True) -> None:
         
         self.dataset_name = dataset_name
         self.dataset_dir = dataset_dir
@@ -72,6 +76,9 @@ class Preprocessor:
         self.energy_phoneme_averaging = energy_phoneme_averaging
         self.pitch_normalization = pitch_normalization
         self.energy_normalization = energy_normalization
+
+        self.with_f0 = with_f0
+        self.with_f0_cwt = with_f0_cwt
 
         self.cmudict = cmudict.CMUDict(cmudict_path)
 
@@ -96,6 +103,21 @@ class Preprocessor:
 
         if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "duration")):
             os.makedirs(os.path.join(self.save_dir, self.dataset_name, "duration"), True)
+
+        if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "f0")):
+            os.makedirs(os.path.join(self.save_dir, self.dataset_name, "f0"))
+
+        if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "cwt_specs")):
+            os.makedirs(os.path.join(self.save_dir, self.dataset_name, "cwt_specs"))
+        
+        if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "cwt_scales")):
+            os.makedirs(os.path.join(self.save_dir, self.dataset_name, "cwt_scales"))
+
+        if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "f0cwt_mean_std")):
+            os.makedirs(os.path.join(self.save_dir, self.dataset_name, "f0cwt_mean_std"))
+
+        if not os.path.exists(os.path.join(self.save_dir, self.dataset_name, "mel2ph")):
+            os.makedirs(os.path.join(self.save_dir, self.dataset_name, "mel2ph"))
 
         if self.dataset_name.lower() == "ljspeech":
             speaker = "LJSpeech"
@@ -195,7 +217,7 @@ class Preprocessor:
 
         # Get alignments
         textgrid = tgt.io.read_textgrid(tgt_path)
-        phone, duration, start, end = self.get_alignment(
+        phone, duration, mel2ph, start, end = self.get_alignment(
             textgrid.get_tier_by_name("phones")
         )
         text = "{" + " ".join(phone) + "}"
@@ -203,7 +225,7 @@ class Preprocessor:
         phoneme_id = _symbols_to_sequence(symbols=phoneme_arpa)
         if start >= end:
             return None
-        print("==========================")
+        print("=======================================================================================================")
         # Read and trim wav files
         wav, _ = librosa.load(file_path)
         wav = wav[
@@ -223,30 +245,9 @@ class Preprocessor:
 
         # Compute mel-scale spectrogram and energy
         mel, energy = tools.get_mel_from_wav(wav, self.STFT)
-        print(f"sum duration: {sum(duration)}, pitch shape: {pitch.shape}, energy shape: {energy.shape}, melspectrogram shape: {mel.shape}")
+        # print(f"sum duration: {sum(duration)}, pitch shape: {pitch.shape}, energy shape: {energy.shape}, melspectrogram shape: {mel.shape}")
         mel = mel[:, : sum(duration)]
         energy = energy[: sum(duration)]
-
-        if self.pitch_phoneme_averaging:
-            # perform linear interpolation
-            nonzero_ids = np.where(pitch != 0)[0]
-            interp_fn = interp1d(
-                nonzero_ids,
-                pitch[nonzero_ids],
-                fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
-                bounds_error=False,
-            )
-            pitch = interp_fn(np.arange(0, len(pitch)))
-
-            # Phoneme-level average
-            pos = 0
-            for i, d in enumerate(duration):
-                if d > 0:
-                    pitch[i] = np.mean(pitch[pos : pos + d])
-                else:
-                    pitch[i] = 0
-                pos += d
-            pitch = pitch[: len(duration)]
 
         if self.energy_phoneme_averaging:
             # Phoneme-level average
@@ -258,6 +259,18 @@ class Preprocessor:
                     energy[i] = 0
                 pos += d
             energy = energy[: len(duration)]
+
+        # Compute pitch
+        if self.with_f0:
+            f0, pitch = self.get_pitch(wav=wav, mel=mel.T)
+            if f0 is None or sum(f0) == 0:
+                return None
+            if self.with_f0_cwt:
+                cwt_spec, cwt_scales, f0cwt_mean_std = self.get_f0cwt(f0=f0)
+                if np.any(np.isnan(cwt_spec)):
+                    return None
+                
+        print(f"sum duration: {sum(duration)}, pitch shape: {pitch.shape}, phoneme length: {len(phoneme_id)}, energy shape: {energy.shape}, melspectrogram shape: {mel.shape}, f0 shape: {f0.shape}, cwt_spec shape: {cwt_spec.shape}, cwt_scales shape: {cwt_scales.shape}")
 
         dur_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
         dur_filepath = os.path.join(self.save_dir, self.dataset_name, "duration", dur_filename)
@@ -271,17 +284,78 @@ class Preprocessor:
         energy_filepath = os.path.join(self.save_dir, self.dataset_name, "energy", energy_filename)
         np.save(energy_filepath, energy)
 
+        mel2ph_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
+        mel2ph_filepath = os.path.join(self.save_dir, self.dataset_name, "mel2ph", mel2ph_filename)
+        np.save(mel2ph_filepath, mel2ph)
+
+        f0_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
+        f0_filepath = os.path.join(self.save_dir, self.dataset_name, "f0", f0_filename)
+        np.save(f0_filepath, f0)
+
         pitch_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
         pitch_filepath = os.path.join(self.save_dir, self.dataset_name, "pitch", pitch_filename)
         np.save(pitch_filepath, pitch)
 
+        cwt_spec_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
+        cwt_spec_filepath = os.path.join(self.save_dir, self.dataset_name, "cwt_specs", cwt_spec_filename)
+        np.save(cwt_spec_filepath, cwt_spec)
+
+        cwt_scales_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
+        cwt_scales_filepath = os.path.join(self.save_dir, self.dataset_name, "cwt_scales", cwt_scales_filename)
+        np.save(cwt_scales_filepath, cwt_scales)
+
+        f0cwt_mean_std_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.npy"
+        f0cwt_mean_std_filepath = os.path.join(self.save_dir, self.dataset_name, "f0cwt_mean_std", f0cwt_mean_std_filename)
+        np.save(f0cwt_mean_std_filepath, f0cwt_mean_std)
+
         return phoneme_id, mel, self.remove_outlier(energy), self.remove_outlier(pitch), mel.shape[1]
 
+    # def get_alignment(self, tier):
+    #     sil_phones = ["sil", "sp", "spn"]
+
+    #     phones = []
+    #     durations = []
+    #     start_time = 0
+    #     end_time = 0
+    #     end_idx = 0
+    #     for t in tier._objects:
+    #         s, e, p = t.start_time, t.end_time, t.text
+
+    #         # Trim leading silences
+    #         if phones == []:
+    #             if p in sil_phones:
+    #                 continue
+    #             else:
+    #                 start_time = s
+
+    #         if p not in sil_phones:
+    #             # For ordinary phones
+    #             phones.append(p)
+    #             end_time = e
+    #             end_idx = len(phones)
+    #         else:
+    #             # For silent phones
+    #             phones.append(p)
+
+    #         durations.append(
+    #             int(
+    #                 np.round(e * self.sampling_rate / self.hop_length)
+    #                 - np.round(s * self.sampling_rate / self.hop_length)
+    #             )
+    #         )
+
+    #     # Trim tailing silences
+    #     phones = phones[:end_idx]
+    #     durations = durations[:end_idx]
+
+    #     return phones, durations, start_time, end_time
+
     def get_alignment(self, tier):
         sil_phones = ["sil", "sp", "spn"]
 
         phones = []
         durations = []
+        mel2ph = []
         start_time = 0
         end_time = 0
         end_idx = 0
@@ -315,47 +389,27 @@ class Preprocessor:
         phones = phones[:end_idx]
         durations = durations[:end_idx]
 
-        return phones, durations, start_time, end_time
+        # Get mel2ph
+        for ph_idx in range(len(phones)):
+            mel2ph += [ph_idx + 1] * durations[ph_idx]
+        assert sum(durations) == len(mel2ph)
 
-    def get_alignment(self, tier):
-        sil_phones = ["sil", "sp", "spn"]
-
-        phones = []
-        durations = []
-        start_time = 0
-        end_time = 0
-        end_idx = 0
-        for t in tier._objects:
-            s, e, p = t.start_time, t.end_time, t.text
-
-            # Trim leading silences
-            if phones == []:
-                if p in sil_phones:
-                    continue
-                else:
-                    start_time = s
-
-            if p not in sil_phones:
-                # For ordinary phones
-                phones.append(p)
-                end_time = e
-                end_idx = len(phones)
-            else:
-                # For silent phones
-                phones.append(p)
-
-            durations.append(
-                int(
-                    np.round(e * self.sampling_rate / self.hop_length)
-                    - np.round(s * self.sampling_rate / self.hop_length)
-                )
-            )
-
-        # Trim tailing silences
-        phones = phones[:end_idx]
-        durations = durations[:end_idx]
-
-        return phones, durations, start_time, end_time
+        return phones, durations, mel2ph, start_time, end_time
+    
+    def get_pitch(self, wav, mel):
+        f0, pitch_coarse = get_pitch(wav_data=wav, mel=mel, sampling_rate=self.sampling_rate, hop_length=self.hop_length)
+        return f0, pitch_coarse
+    
+    def get_f0cwt(self, f0):
+        uv, cont_lf0_lpf = get_cont_lf0(f0=f0)
+    
+    def get_f0cwt(self, f0):
+        uv, cont_lf0_lpf = get_cont_lf0(f0=f0)
+        logf0s_mean_org, logf0s_std_org = np.mean(cont_lf0_lpf), np.std(cont_lf0_lpf)
+        logf0s_mean_std_org = np.array([logf0s_mean_org, logf0s_std_org])
+        cont_lf0_lpf_norm = (cont_lf0_lpf - logf0s_mean_org) / logf0s_std_org
+        wavelet_lf0, scales = get_lf0_cwt(lf0=cont_lf0_lpf_norm)
+        return wavelet_lf0, scales, logf0s_mean_std_org
 
     def remove_outlier(self, values):
         values = np.array(values)
@@ -389,3 +443,4 @@ if __name__ == "__main__":
 
 
     preprocessor.build_from_path()
+    
