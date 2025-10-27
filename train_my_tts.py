@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 import params
 from model import VarianceAdaptorGradTTS
 from data_precomputed import PrecomputedTextMelDurPitchDataset, PrecomputedTextMelDurPitchBatchCollate
-from utils import plot_tensor, save_plot, expand
+from utils import plot_tensor_with_pitch_energy, save_plot_with_pitch_energy, expand
 from text.symbols import symbols
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -234,12 +234,12 @@ if __name__ == "__main__":
         elif energy_feature_level == "frame_level":
             energy_predict = energy_target.squeeze().numpy()
 
-        logger.add_image(f"image_{i}/ground_truth", plot_tensor(tensor=mel.squeeze(),
-                                                                pitch_predict=pitch_predict,
-                                                                energy_predict=energy_predict, 
-                                                                stats=(pitch_min, pitch_max, energy_min, energy_max)),
+        logger.add_image(f"image_{i}/ground_truth", plot_tensor_with_pitch_energy(tensor=mel.squeeze(),
+                                                                                  pitch_predict=pitch_predict,
+                                                                                  energy_predict=energy_predict, 
+                                                                                  stats=(pitch_min, pitch_max, energy_min, energy_max)),
                          global_step=0, dataformats="HWC")
-        save_plot(tensor=mel.squeeze(),
+        save_plot_with_pitch_energy(tensor=mel.squeeze(),
                   pitch_predict=pitch_predict,
                   energy_predict=energy_predict, 
                   stats=(pitch_min, pitch_max, energy_min, energy_max),
@@ -370,27 +370,27 @@ if __name__ == "__main__":
                 elif energy_feature_level == "frame_level":
                     energy_predict = energy_prediction.squeeze().cpu().numpy()
                 logger.add_image(f"image_{i}/generated_enc",
-                                 plot_tensor(tensor=y_enc.squeeze().cpu().numpy(), 
-                                             pitch_predict=pitch_predict,
-                                             energy_predict=energy_predict,
-                                             stats=(pitch_min, pitch_max, energy_min, energy_max)),
-                                 global_step=iteration, dataformats="HWC")
+                                 plot_tensor_with_pitch_energy(tensor=y_enc.squeeze().cpu().numpy(), 
+                                                               pitch_predict=pitch_predict,
+                                                               energy_predict=energy_predict,
+                                                               stats=(pitch_min, pitch_max, energy_min, energy_max)),
+                                                               global_step=iteration, dataformats="HWC")
                 logger.add_image(f"image_{i}/generated_dec",
-                                 plot_tensor(tensor=y_dec.squeeze().cpu().numpy(), 
-                                             pitch_predict=pitch_predict,
-                                             energy_predict=energy_predict,
-                                             stats=(pitch_min, pitch_max, energy_min, energy_max)),
-                                 global_step=iteration, dataformats="HWC")
-                save_plot(tensor=y_enc.squeeze().cpu().numpy(),
-                          pitch_predict=pitch_predict,
-                          energy_predict=energy_predict,
-                          stats=(pitch_min, pitch_max, energy_min, energy_max),
-                          savepath=os.path.join(log_dir, f"generated_enc_{i}.png"))
-                save_plot(tensor=y_dec.squeeze().cpu().numpy(),
-                          pitch_predict=pitch_predict,
-                          energy_predict=energy_predict,
-                          stats=(pitch_min, pitch_max, energy_min, energy_max),
-                          savepath=os.path.join(log_dir, f"generated_dec_{i}.png"))
+                                 plot_tensor_with_pitch_energy(tensor=y_dec.squeeze().cpu().numpy(), 
+                                                               pitch_predict=pitch_predict,
+                                                               energy_predict=energy_predict,
+                                                               stats=(pitch_min, pitch_max, energy_min, energy_max)),
+                                                               global_step=iteration, dataformats="HWC")
+                save_plot_with_pitch_energy(tensor=y_enc.squeeze().cpu().numpy(),
+                                            pitch_predict=pitch_predict,
+                                            energy_predict=energy_predict,
+                                            stats=(pitch_min, pitch_max, energy_min, energy_max),
+                                            savepath=os.path.join(log_dir, f"generated_enc_{i}.png"))
+                save_plot_with_pitch_energy(tensor=y_dec.squeeze().cpu().numpy(),
+                                            pitch_predict=pitch_predict,
+                                            energy_predict=energy_predict,
+                                            stats=(pitch_min, pitch_max, energy_min, energy_max),
+                                            savepath=os.path.join(log_dir, f"generated_dec_{i}.png"))
                 
         ckpt = {"model_state_dict": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
