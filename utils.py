@@ -70,7 +70,7 @@ def save_figure_to_numpy(fig):
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     return data
 
-def plot_mel(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
+def plot_mel_with_pitch_energy(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
     pitch_min, pitch_max, energy_min, energy_max = stats
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(12, 3))
@@ -101,20 +101,45 @@ def plot_mel(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stat
     return fig
 
 
-def plot_tensor(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
-    fig = plot_mel(tensor=tensor, 
-                   pitch_predict=pitch_predict,
-                   energy_predict=energy_predict,
-                   stats=stats)
+def plot_tensor_with_pitch_energy(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
+    fig = plot_mel_with_pitch_energy(tensor=tensor, 
+                                     pitch_predict=pitch_predict,
+                                     energy_predict=energy_predict,
+                                     stats=stats)
     data = save_figure_to_numpy(fig)
     return data
 
 
-def save_plot(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float], savepath):
-    fig = plot_mel(tensor=tensor, 
-                   pitch_predict=pitch_predict,
-                   energy_predict=energy_predict,
-                   stats=stats)
+def save_plot_with_pitch_energy(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float], savepath):
+    fig = plot_mel_with_pitch_energy(tensor=tensor, 
+                                     pitch_predict=pitch_predict,
+                                     energy_predict=energy_predict,
+                                     stats=stats)
+    fig.savefig(savepath)
+    return
+
+def plot_mel(tensor):
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(12, 3))
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
+    plt.colorbar(im, ax=ax)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Mel-Spectrogram")
+
+    plt.tight_layout()
+    fig.canvas.draw()
+    plt.close()
+
+    return fig
+
+def plot_tensor(tensor):
+    fig = plot_mel(tensor=tensor)
+    data = save_figure_to_numpy(fig)
+    return data
+
+def save_plot(tensor, savepath):
+    fig = plot_mel(tensor=tensor)
     fig.savefig(savepath)
     return
 
