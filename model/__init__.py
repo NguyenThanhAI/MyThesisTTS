@@ -6,4 +6,4 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # MIT License for more details.
 
-from .tts import GradTTS, VarianceAdaptorGradTTS
+from .tts import GradTTS, VarianceAdaptorGradTTS, GradTTSWithSpeakerEmbedding
