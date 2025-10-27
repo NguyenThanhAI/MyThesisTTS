@@ -151,11 +151,11 @@ def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, 
         val_diff_loss = diffusion_loss_accumulative / num_samples
 
         print(f"Evaluate at step: {step}, val duration loss: {val_dur_loss}, val prior loss: {val_prior_loss}, val diff loss: {val_diff_loss}")
-        experiment.log_metric("val/duration_loss", val_dur_loss.item(),
+        experiment.log_metric("val/duration_loss", val_dur_loss,
                                   step=step)
-        experiment.log_metric("val/prior_loss", val_prior_loss.item(),
+        experiment.log_metric("val/prior_loss", val_prior_loss,
                                 step=step)
-        experiment.log_metric("val/diffusion_loss", val_diff_loss.item(),
+        experiment.log_metric("val/diffusion_loss", val_diff_loss,
                                 step=step)
     model.train()
         
@@ -170,17 +170,17 @@ def synthesize_melspectrogram(model: GradTTSWithSpeakerEmbedding, val_dataset, e
                 spker_embed = item["spker_embed"].to(device=device)
                 y_enc, y_dec, attn = model(x, x_lengths, spk=spker_embed, n_timesteps=50)
                 experiment.log_figure(
-                    figure_name="image_{i}/generated_enc",
+                    figure_name="val/image_{i}/generated_enc",
                     figure=plot_mel(y_enc.squeeze().cpu()),
                     step=step
                 )
                 experiment.log_figure(
-                    figure_name=f"image_{i}/generated_dec",
+                    figure_name=f"val/image_{i}/generated_dec",
                     figure=plot_mel(y_dec.squeeze().cpu()),
                     step=step
                 )
                 experiment.log_figure(
-                    figure_name=f"image_{i}/alignment",
+                    figure_name=f"val/image_{i}/alignment",
                     figure=plot_tensor(attn.squeeze().cpu()),
                     step=step
                 )
