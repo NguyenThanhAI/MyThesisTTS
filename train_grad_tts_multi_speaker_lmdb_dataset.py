@@ -447,7 +447,7 @@ if __name__ == "__main__":
             diff_losses.append(diff_loss.item())
 
             iteration += 1
-            description = f"duration loss: {dur_loss.item():.3f}, prior_loss: {prior_loss.item():.3f}, diff_loss: {diff_loss.item():.3f}, enc_grad_norm: {enc_grad_norm.item():.3f}, dec_grad_norm: {dec_grad_norm.item():.3f}"
+            description = f"dur_loss: {dur_loss.item():.3f}, prior_loss: {prior_loss.item():.3f}, diff_loss: {diff_loss.item():.3f}"
             outer_bar.set_description(description)
             outer_bar.update(1)
 
@@ -470,7 +470,8 @@ if __name__ == "__main__":
         evaluate_losses(
             model=model,
             val_loader=val_loader,
-            experiment=experiment
+            experiment=experiment,
+            step=iteration
         )
         end_time = time.time()
         if check_time_limit and (end_time - start_time) > max_time_run:
