@@ -186,3 +186,111 @@ class TextMelSpeakerBatchCollate(object):
         x_lengths = torch.LongTensor(x_lengths)
         spk = torch.cat(spk, dim=0)
         return {'x': x, 'x_lengths': x_lengths, 'y': y, 'y_lengths': y_lengths, 'spk': spk}
+
+import os
+import lmdb
+import json
+import pickle
+import io
+
+class LMDBTextMelSpeakerEmbedPrecomputedDataset(torch.utils.data.Dataset):
+    def __init__(self, filename, dataset_dir):
+        self.filename = filename
+        self.dataset_dir = dataset_dir
+
+        self.basename, self.speaker, self.raw_text = self.process_meta()
+
+        assert len(self.basename) == len(self.speaker) == len(self.raw_text)
+
+        if filename.startswith("train"):
+            self.lmdb_filename = "train_data.lmdb"
+        elif filename.startswith("val"):
+            self.lmdb_filename = "val_data.lmdb"
+
+        self.env = None
+
+        with open(os.path.join(self.dataset_dir, "speakers.json")) as f:
+            self.speaker_map = json.load(f)
+
+    def _init_env(self):
+        if self.env is None:
+            self.env = lmdb.open(
+                os.path.join(self.dataset_dir, "lmdb", self.lmdb_filename),
+                max_readers=32,
+                readonly=True,
+                lock=False,
+                readahead=False,
+                meminit=False,
+            )
+            self.txn = self.env.begin(buffers=True)
+
+    def process_meta(self):
+        with open(
+            os.path.join(self.dataset_dir, self.filename), "r", encoding="utf-8"
+        ) as f:
+            name = []
+            speaker = []
+            raw_text = []
+            for line in f.readlines():
+                n, s, r = line.strip("\n").split("|")
+                name.append(n)
+                speaker.append(s)
+                raw_text.append(r)
+            return name, speaker, raw_text
+        
+    def __len__(self):
+        return len(self.basename)
+    
+    def __getitem__(self, idx):
+        self._init_env()
+        basename = self.basename[idx]
+        speaker = self.speaker[idx]
+        speaker_id = self.speaker_map[speaker]
+        raw_text = self.raw_text[idx]
+        key = "{}-{}".format(speaker, basename)
+        embed_key = "{}-speaker_embed".format(speaker)
+        byteflow = self.txn.get(key.encode("utf-8"))
+        sample_lmdb = pickle.loads(byteflow)
+        phoneme = sample_lmdb["phoneme"]
+        mel = sample_lmdb["mel_spectrogram"]
+        spker_embed = self.txn.get(embed_key.encode("utf-8"))
+        spker_embed = np.load(io.BytesIO(spker_embed))
+
+        phoneme = torch.IntTensor(phoneme)
+        mel = torch.FloatTensor(mel)
+        spker_embed = torch.FloatTensor(spker_embed)
+
+        return {"x": phoneme, "y": mel, "spker_embed": spker_embed}
+    
+
+class LMDBTextMelSpeakerEmbedPrecomputedBatchCollate(object):
+    def __call__(self, batch):
+        B = len(batch)
+        y_max_length = max([item['y'].shape[-1] for item in batch])
+        y_max_length = fix_len_compatibility(y_max_length)
+        x_max_length = max([item['x'].shape[-1] for item in batch])
+        n_feats = batch[0]['y'].shape[-2]
+
+        speaker_embed_dim = batch[0]['spker_embed'].shape[1]
+
+        y = torch.zeros((B, n_feats, y_max_length), dtype=torch.float32)
+        x = torch.zeros((B, x_max_length), dtype=torch.long)
+        speaker_embed = torch.zeros((B, speaker_embed_dim), dtype=torch.float32)
+        y_lengths, x_lengths = [], []
+
+        for i, item in enumerate(batch):
+            y_, x_ = item['y'], item['x']
+            speaker_embed_ = item['spker_embed']
+            y_lengths.append(y_.shape[-1])
+            x_lengths.append(x_.shape[-1])
+            # print(f"y_max_lengths: {y_max_length}, y_lengths: {y_.shape[-1]}")
+            y[i, :, :y_.shape[-1]] = y_
+            x[i, :x_.shape[-1]] = x_
+            speaker_embed[i, :] = speaker_embed_
+
+        y_lengths = torch.LongTensor(y_lengths)
+        x_lengths = torch.LongTensor(x_lengths)
+        return {'x': x, 'x_lengths': x_lengths, 
+                'y': y, 'y_lengths': y_lengths,
+                'spker_embed': speaker_embed}
+    
