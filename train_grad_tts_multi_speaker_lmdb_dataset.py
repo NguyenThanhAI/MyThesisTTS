@@ -25,6 +25,8 @@ from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_co
 from utils import TensorBoardLoggerExperimentLikeComet
 from text.symbols import symbols
 
+from typing import Union
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def str2bool(v):
@@ -126,7 +128,7 @@ def save_model(model, optimizer, scheduler, epoch, iteration):
     torch.save(ckpt, f=os.path.join(log_dir, f"grad_tts_multi_speaker_ljspeech_steps_{iteration}.pt"))
     
 
-def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, experiment: Experiment, step: int):
+def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], step: int):
     print("Evaluate losses")
     model.eval()
     dur_loss_accumlative = 0
@@ -164,7 +166,7 @@ def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, 
                                 step=step)
     model.train()
         
-def synthesize_melspectrogram(model: GradTTSWithSpeakerEmbedding, val_dataset, experiment: Experiment, step: int):
+def synthesize_melspectrogram(model: GradTTSWithSpeakerEmbedding, val_dataset, experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], step: int):
     print("Synthesis")
     model.eval()
     with torch.no_grad():
