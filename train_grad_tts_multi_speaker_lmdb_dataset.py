@@ -5,6 +5,8 @@ import argparse
 import time
 import math
 
+import matplotlib.pyplot as plt
+
 import numpy as np
 from tqdm import tqdm
 
@@ -19,7 +21,7 @@ from comet_ml import Experiment, ExistingExperiment
 import params
 from model import GradTTSWithSpeakerEmbedding
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
-from utils import plot_mel, plot_tensor, save_plot
+from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
 from text.symbols import symbols
 
@@ -170,23 +172,41 @@ def synthesize_melspectrogram(model: GradTTSWithSpeakerEmbedding, val_dataset, e
             if np.random.rand() < 0.1:
                 x = item["x"].to(torch.long).unsqueeze(0).to(device=device)
                 x_lengths = torch.LongTensor([x.shape[-1]]).to(device=device)
+                y = item["y"]
                 spker_embed = item["spker_embed"].to(device=device)
                 y_enc, y_dec, attn = model(x, x_lengths, spk=spker_embed, n_timesteps=50)
+
+                fig_mel_gt = plot_mel_comet(y)
                 experiment.log_figure(
-                    figure_name="val/image_{i}/generated_enc",
-                    figure=plot_mel(y_enc.squeeze().cpu()),
+                    figure_name=f"val/image_{i}/groundtruth_melspectrogram",
+                    figure=fig_mel_gt,
                     step=step
                 )
+                plt.close(fig_mel_gt)
+
+                fig_enc = plot_mel_comet(y_enc.squeeze().cpu())
+                experiment.log_figure(
+                    figure_name=f"val/image_{i}/generated_enc",
+                    figure=fig_enc,
+                    step=step
+                )
+                plt.close(fig_enc)
+
+                fig_dec = plot_mel_comet(y_dec.squeeze().cpu())
                 experiment.log_figure(
                     figure_name=f"val/image_{i}/generated_dec",
-                    figure=plot_mel(y_dec.squeeze().cpu()),
+                    figure=fig_dec,
                     step=step
                 )
+                plt.close(fig_dec)
+
+                fig_attn = plot_attn_comet(attn.squeeze().cpu())
                 experiment.log_figure(
                     figure_name=f"val/image_{i}/alignment",
-                    figure=plot_tensor(attn.squeeze().cpu()),
+                    figure=fig_attn,
                     step=step
                 )
+                plt.close(fig_attn)
 
     model.train()
 

@@ -133,6 +133,32 @@ def plot_mel(tensor):
 
     return fig
 
+def plot_mel_comet(tensor):
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(12, 3))
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
+    plt.colorbar(im, ax=ax)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Mel-Spectrogram")
+
+    plt.tight_layout()
+
+    return fig
+
+def plot_attn_comet(tensor):
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(12, 9))
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
+    plt.colorbar(im, ax=ax)
+    ax.set_xlabel("Temporal")
+    ax.set_ylabel("Phoneme")
+    ax.set_title("Attention map")
+
+    plt.tight_layout()
+
+    return fig
+
 def plot_tensor(tensor):
     fig = plot_mel(tensor=tensor)
     data = save_figure_to_numpy(fig)
