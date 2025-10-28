@@ -149,3 +149,26 @@ def expand(values, durations):
     for value, d in zip(values, durations):
         out += [value] * max(0, int(d))
     return np.array(out)
+
+
+from torch.utils.tensorboard import SummaryWriter
+import matplotlib.pyplot as plt
+
+
+class TensorBoardLoggerExperimentLikeComet:
+    def __init__(self, log_dir: str, start_step: int) -> None:
+        self.writer = SummaryWriter(log_dir=log_dir, purge_step=start_step)
+
+    def log_metric(self, name: str, value: float, step: int) -> None:
+        self.writer.add_scalar(
+            tag=name,
+            scalar_value=value,
+            global_step=step
+        )
+
+    def log_figure(self, figure_name: str, figure, step: int) -> None:
+        self.writer.add_figure(
+            tag=figure_name,
+            figure=figure,
+            global_step=step
+        )

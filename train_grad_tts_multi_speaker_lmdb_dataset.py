@@ -20,6 +20,7 @@ import params
 from model import GradTTSWithSpeakerEmbedding
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
 from utils import plot_mel, plot_tensor, save_plot
+from utils import TensorBoardLoggerExperimentLikeComet
 from text.symbols import symbols
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -140,11 +141,13 @@ def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, 
                                                                  y=y, y_lengths=y_lengths,
                                                                  spk=spker_embed,
                                                                  out_size=out_size)
-            dur_loss_accumlative += dur_loss.item()
-            prior_loss_accumulative += prior_loss.item()
-            diffusion_loss_accumulative += diff_loss.item()
+            size_of_this_batch = x.shape[0]
+            num_samples += size_of_this_batch
 
-            num_samples += x.shape[0]
+            dur_loss_accumlative += dur_loss.item() * size_of_this_batch
+            prior_loss_accumulative += prior_loss.item() * size_of_this_batch
+            diffusion_loss_accumulative += diff_loss.item() * size_of_this_batch
+
 
         val_dur_loss = dur_loss_accumlative / num_samples
         val_prior_loss = prior_loss_accumulative / num_samples
@@ -226,6 +229,7 @@ def get_args():
     parser.add_argument("--save_every", type=int, default=50000)
     parser.add_argument("--max_time_run", type=int, default=None)
     parser.add_argument("--synthesize_every", type=int, default=1000)
+    parser.add_argument("--logger_type", type=str, default="comet", choices=["comet", "tensorboard"])
     parser.add_argument("--comet_api_key", type=str, default=None)
     parser.add_argument("--comet_existing_experiment_id", type=str, default=None)
 
@@ -280,26 +284,28 @@ if __name__ == "__main__":
     synthesize_every = args.synthesize_every
     max_time_run = args.max_time_run
 
+    logger_type = args.logger_type
     comet_api_key = args.comet_api_key
     comet_existing_experiment_id = args.comet_existing_experiment_id
 
     print(f"Arguments: {args}")
 
-    os.environ["COMET_API_KEY"] = comet_api_key
+    if logger_type == "comet":
+        os.environ["COMET_API_KEY"] = comet_api_key
 
-    comet_ml.login()
+        comet_ml.login()
 
-    if comet_existing_experiment_id is not None:
-        experiment = ExistingExperiment(
-            project_name="grad-tts-multi-speaker",
-            workspace="thanh-nguy-n",
-            experiment_key=comet_existing_experiment_id
-        )
-    else:
-        experiment = Experiment(
-            project_name="grad-tts-multi-speaker",
-            workspace="thanh-nguy-n"
-        )
+        if comet_existing_experiment_id is not None:
+            experiment = ExistingExperiment(
+                project_name="grad-tts-multi-speaker",
+                workspace="thanh-nguy-n",
+                experiment_key=comet_existing_experiment_id
+            )
+        else:
+            experiment = Experiment(
+                project_name="grad-tts-multi-speaker",
+                workspace="thanh-nguy-n"
+            )
 
     print("Initializing data loaders...")
     train_dataset = LMDBTextMelSpeakerEmbedPrecomputedDataset(
@@ -365,7 +371,7 @@ if __name__ == "__main__":
                               scheduler_type=lr_scheduler, 
                               num_training_steps=total_training_steps, 
                               num_warmup_steps=num_warmup_steps,
-                              gamma=0.99, 
+                              gamma=0.999, 
                               decay_steps=len(train_loader))
     
     pretrained_checkpoint = find_resume_checkpoint(resume_checkpoint_dir=pretrained_dir)
@@ -382,6 +388,9 @@ if __name__ == "__main__":
     else:
         epoch_start = 1
         iteration_start = 0
+    
+    if logger_type == "tensorboard":
+        experiment = TensorBoardLoggerExperimentLikeComet(log_dir=log_dir, start_step=iteration_start)
     outer_bar = tqdm(total=total_training_steps, desc="Training", position=iteration_start)
     outer_bar.n = iteration_start
     epoch = epoch_start
