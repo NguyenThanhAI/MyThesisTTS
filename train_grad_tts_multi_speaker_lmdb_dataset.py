@@ -462,7 +462,7 @@ if __name__ == "__main__":
             iteration += 1
             continue
     
-        inner_bar = tqdm(total=len(train_loader), desc="Epoch {}".format(epoch), position=1, leave=False)
+        inner_bar = tqdm(total=len(train_loader), desc="Epoch {}".format(epoch), position=1)
         model.train()
         dur_losses = []
         prior_losses = []
