@@ -441,7 +441,7 @@ if __name__ == "__main__":
     
     if logger_type == "tensorboard":
         experiment = TensorBoardLoggerExperimentLikeComet(log_dir=log_dir, start_step=iteration_start)
-    outer_bar = tqdm(total=total_training_steps, desc="Training", position=iteration_start)
+    outer_bar = tqdm(total=total_training_steps, desc="Training", position=0)
     outer_bar.n = iteration_start
     epoch = epoch_start
     iteration = iteration_start
@@ -459,7 +459,7 @@ if __name__ == "__main__":
             iteration += 1
             continue
     
-        inner_bar = tqdm(total=len(train_loader), desc="Epoch {}".format(epoch), position=epoch)
+        inner_bar = tqdm(total=len(train_loader), desc="Epoch {}".format(epoch), position=0)
         model.train()
         dur_losses = []
         prior_losses = []
