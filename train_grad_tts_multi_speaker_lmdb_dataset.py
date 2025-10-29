@@ -26,8 +26,35 @@ from utils import TensorBoardLoggerExperimentLikeComet
 from text.symbols import symbols
 
 from typing import Union
+import psutil
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def get_optimal_num_workers_and_prefetch_factor(batch_size: int=32, max_workers: int=8):
+    cpu_count = os.cpu_count()
+    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    
+    if cpu_count > 12:
+        num_workers = min(cpu_count, 8)
+    else:
+        # If low RAM
+        if ram_gb < 8:
+            max_workers = min(max_workers, 2)
+        elif ram_gb < 16:
+            max_workers = min(max_workers, 4)
+        
+        # Assign num workers
+        num_workers = min(cpu_count, batch_size, max_workers)
+
+    if ram_gb <= 20:
+        prefetch_factor = 4
+    else:
+        prefetch_factor = 8
+    
+    print(f"Optimal number of workers: {num_workers} (CPU cores: {cpu_count}, RAM: {ram_gb:.1f} GB, Batch size: {batch_size}, Max workers limit: {max_workers}), Prefetch factor: {prefetch_factor}")
+    
+    return num_workers, prefetch_factor
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -106,7 +133,7 @@ def find_resume_checkpoint(resume_checkpoint_dir):
         all_checkpoints = []
         for dirs, _, files in os.walk(resume_checkpoint_dir):
             for file in files:
-                if file.endswith(".pt") and "model" in file:
+                if file.endswith(".pt"):
                     all_checkpoints.append(os.path.join(dirs, file))
         # all_checkpoints = [x for x in all_checkpoints if "model" in x]
         if len(all_checkpoints) == 0:
@@ -330,6 +357,7 @@ if __name__ == "__main__":
             )
 
     print("Initializing data loaders...")
+    num_workers, prefetch_factor = get_optimal_num_workers_and_prefetch_factor(batch_size=batch_size, max_workers=16)
     train_dataset = LMDBTextMelSpeakerEmbedPrecomputedDataset(
         filename="train.txt",
         dataset_dir=dataset_dir
@@ -340,9 +368,9 @@ if __name__ == "__main__":
         batch_size=batch_size,
         collate_fn=batch_collate,
         drop_last=True,
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=True,
-        prefetch_factor=4,
+        prefetch_factor=prefetch_factor,
         persistent_workers=True,
         shuffle=True
     )
