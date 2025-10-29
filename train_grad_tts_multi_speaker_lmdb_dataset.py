@@ -145,12 +145,13 @@ def find_resume_checkpoint(resume_checkpoint_dir):
         return max_step_checkpoint
     return None
 
-def save_model(model, optimizer, scheduler, epoch, iteration):
+def save_model(model, optimizer, scheduler, epoch, iteration, batch_index):
     ckpt = {"model_state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "lr_scheduler": scheduler.state_dict(),
             "epoch": epoch,
-            "iteration": iteration}
+            "iteration": iteration,
+            "batch_index": batch_index}
     print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
     torch.save(ckpt, f=os.path.join(log_dir, f"grad_tts_multi_speaker_ljspeech_steps_{iteration}.pt"))
     
@@ -435,9 +436,11 @@ if __name__ == "__main__":
         scheduler.load_state_dict(checkpoint["lr_scheduler"])
         epoch_start = checkpoint["epoch"]
         iteration_start = checkpoint["iteration"]
+        start_batch_index = checkpoint["batch_index"]
     else:
         epoch_start = 1
         iteration_start = 0
+        start_batch_index = 0
     
     if logger_type == "tensorboard":
         experiment = TensorBoardLoggerExperimentLikeComet(log_dir=log_dir, start_step=iteration_start)
@@ -465,6 +468,8 @@ if __name__ == "__main__":
         prior_losses = []
         diff_losses = []
         for batch_idx, batch in enumerate(train_loader):
+            if epoch == epoch_start and batch_idx < start_batch_index:
+                continue
             model.zero_grad()
             optimizer.zero_grad()
             x, x_lengths = batch["x"].to(device=device), batch["x_lengths"].to(device=device)
@@ -517,7 +522,8 @@ if __name__ == "__main__":
                        optimizer=optimizer,
                        scheduler=scheduler,
                        epoch=epoch,
-                       iteration=iteration)
+                       iteration=iteration,
+                       batch_index=batch_idx)
                 
             if iteration % synthesize_every == 0:
                 synthesize_melspectrogram(model=model,
@@ -539,7 +545,8 @@ if __name__ == "__main__":
                        optimizer=optimizer,
                        scheduler=scheduler,
                        epoch=epoch,
-                       iteration=iteration)
+                       iteration=iteration,
+                       batch_index=batch_idx)
             torch.cuda.empty_cache()
             quit()
 
@@ -549,6 +556,7 @@ if __name__ == "__main__":
                        optimizer=optimizer,
                        scheduler=scheduler,
                        epoch=epoch,
-                       iteration=iteration)
+                       iteration=iteration,
+                       batch_index=batch_idx)
             torch.cuda.empty_cache()
             quit()
