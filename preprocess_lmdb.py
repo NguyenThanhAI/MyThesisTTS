@@ -38,7 +38,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
 
-    print(f"Arguments")
+    print(f"Arguments: {args}")
     
     dataset_name = args.dataset_name
     dataset_dir = args.dataset_dir
