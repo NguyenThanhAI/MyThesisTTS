@@ -210,7 +210,7 @@ class GradTTSWithSpeakerEmbedding(BaseModule):
         self.encoder = TextEncoder(n_vocab=n_vocab, n_feats=n_feats, n_channels=n_enc_channels, 
                                    filter_channels=filter_channels, filter_channels_dp=filter_channels_dp, n_heads=n_heads, 
                                    n_layers=n_enc_layers, kernel_size=enc_kernel, p_dropout=enc_dropout, window_size=window_size,
-                                   spk_emb_dim=spk_emb_dim)
+                                   spk_emb_dim=spk_emb_dim, n_spks=n_spks)
         self.decoder = Diffusion(n_feats=n_feats, dim=dec_dim, n_spks=n_spks, spk_emb_dim=spk_emb_dim, beta_min=beta_min, beta_max=beta_max, pe_scale=pe_scale)
 
     @torch.no_grad()
