@@ -20,6 +20,7 @@ from comet_ml import Experiment, ExistingExperiment
 
 import params
 from model import GradTTSWithSpeakerEmbedding
+from model import GradTTSWithSpeakerEmbeddingAndSALN
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
 from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
@@ -145,7 +146,7 @@ def find_resume_checkpoint(resume_checkpoint_dir):
         return max_step_checkpoint
     return None
 
-def save_model(model, optimizer, scheduler, epoch, iteration, batch_index):
+def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, use_saln: bool=True, dataset_name="LJSpeech"):
     ckpt = {"model_state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "lr_scheduler": scheduler.state_dict(),
@@ -153,7 +154,11 @@ def save_model(model, optimizer, scheduler, epoch, iteration, batch_index):
             "iteration": iteration,
             "batch_index": batch_index}
     print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
-    torch.save(ckpt, f=os.path.join(log_dir, f"grad_tts_multi_speaker_ljspeech_steps_{iteration}.pt"))
+    if use_saln:
+        add = "use_saln"
+    else:
+        add = "no_saln"
+    torch.save(ckpt, f=os.path.join(log_dir, f"grad_tts_multi_speaker_{dataset_name}_{add}_steps_{iteration}.pt"))
     
 
 def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], step: int):
@@ -186,12 +191,12 @@ def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, 
         val_diff_loss = diffusion_loss_accumulative / num_samples
 
         print(f"Evaluate at step: {step}, val duration loss: {val_dur_loss}, val prior loss: {val_prior_loss}, val diff loss: {val_diff_loss}")
-        experiment.log_metric("val/duration_loss", val_dur_loss,
-                                  step=step)
-        experiment.log_metric("val/prior_loss", val_prior_loss,
-                                step=step)
-        experiment.log_metric("val/diffusion_loss", val_diff_loss,
-                                step=step)
+        experiment.log_metric("duration_lossval", val_dur_loss,
+                               step=step)
+        experiment.log_metric("prior_loss/val", val_prior_loss,
+                               step=step)
+        experiment.log_metric("diffusion_loss/val", val_diff_loss,
+                               step=step)
     model.train()
         
 def synthesize_melspectrogram(model: GradTTSWithSpeakerEmbedding, val_dataset, experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], step: int):
@@ -245,12 +250,12 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--pretrained_dir", type=str, default=None)
-    parser.add_argument("--dataset_dir", type=str, default=r"D:\TTS_Preprocessed_Grad_TTS\LJSpeech")
+    parser.add_argument("--dataset_dir", type=str, default=r"D:\TTS_Preprocessed_Grad_TTS\Phoneme_Mel_Speaker_Embed\LJSpeech")
     parser.add_argument("--cmudict_path", type=str, default=params.cmudict_path)
     parser.add_argument("--add_blank", type=str2bool, default=params.add_blank)
     parser.add_argument("--log_dir", type=str, default=params.log_dir)
     parser.add_argument("--n_epochs", type=int, default=3000)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--out_size", type=int, default=params.out_size)
     parser.add_argument("--learning_rate", type=float, default=params.learning_rate)
     parser.add_argument("--lr_scheduler", type=str, default="constant")
@@ -279,9 +284,13 @@ def get_args():
     parser.add_argument("--save_every", type=int, default=50000)
     parser.add_argument("--max_time_run", type=int, default=None)
     parser.add_argument("--synthesize_every", type=int, default=1000)
-    parser.add_argument("--logger_type", type=str, default="comet", choices=["comet", "tensorboard"])
+    parser.add_argument("--logger_type", type=str, default="tensorboard", choices=["comet", "tensorboard"])
     parser.add_argument("--comet_api_key", type=str, default=None)
     parser.add_argument("--comet_existing_experiment_id", type=str, default=None)
+
+    parser.add_argument("--use_saln", type=str2bool, default=True)
+    parser.add_argument("--log_to_file_every", type=int, default=1)
+    parser.add_argument("--dataset_name", type=str, default="LJSpeech")
 
     args = parser.parse_args()
 
@@ -338,6 +347,10 @@ if __name__ == "__main__":
     comet_api_key = args.comet_api_key
     comet_existing_experiment_id = args.comet_existing_experiment_id
 
+    use_saln = args.use_saln
+    log_to_file_every = args.log_to_file_every
+    dataset_name = args.dataset_name
+
     print(f"Arguments: {args}")
 
     if logger_type == "comet":
@@ -392,24 +405,46 @@ if __name__ == "__main__":
         shuffle=False
     )
     print("Initializing model...")
-    model = GradTTSWithSpeakerEmbedding(
-        n_vocab=nsymbols,
-        n_spks=2,
-        spk_emb_dim=512,
-        n_enc_channels=n_enc_channels,
-        filter_channels=filter_channels,
-        filter_channels_dp=filter_channels_dp,
-        n_heads=n_heads,
-        n_enc_layers=n_enc_layers,
-        enc_kernel=enc_kernel,
-        enc_dropout=enc_dropout, 
-        window_size=window_size, 
-        n_feats=n_feats, 
-        dec_dim=dec_dim, 
-        beta_min=beta_min, 
-        beta_max=beta_max, 
-        pe_scale=pe_scale
-    ).to(device=device)
+    if not use_saln:
+        print("Using GradTTS with Speaker Embedding model")
+        model = GradTTSWithSpeakerEmbedding(
+            n_vocab=nsymbols,
+            n_spks=2,
+            spk_emb_dim=512,
+            n_enc_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_enc_layers=n_enc_layers,
+            enc_kernel=enc_kernel,
+            enc_dropout=enc_dropout, 
+            window_size=window_size, 
+            n_feats=n_feats, 
+            dec_dim=dec_dim, 
+            beta_min=beta_min, 
+            beta_max=beta_max, 
+            pe_scale=pe_scale
+        ).to(device=device)
+    else:
+        print("Using GradTTS with Speaker Embedding and SALN model")
+        model = GradTTSWithSpeakerEmbeddingAndSALN(
+            n_vocab=nsymbols,
+            n_spks=2,
+            spk_emb_dim=512,
+            n_enc_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_enc_layers=n_enc_layers,
+            enc_kernel=enc_kernel,
+            enc_dropout=enc_dropout, 
+            window_size=window_size, 
+            n_feats=n_feats, 
+            dec_dim=dec_dim, 
+            beta_min=beta_min, 
+            beta_max=beta_max, 
+            pe_scale=pe_scale
+        ).to(device=device)
     print("Number of encoder + duration predictor parameters: %.2fm" % (model.encoder.nparams/1e6))
     print("Number of decoder parameters: %.2fm" % (model.decoder.nparams/1e6))
     print("Total parameters: %.2fm" % (model.nparams/1e6))
@@ -492,19 +527,19 @@ if __name__ == "__main__":
             scheduler.step()
 
             current_lr = scheduler.get_last_lr()[0]
-
-            experiment.log_metric("training/duration_loss", dur_loss.item(),
-                                  step=iteration)
-            experiment.log_metric("training/prior_loss", prior_loss.item(),
-                                  step=iteration)
-            experiment.log_metric("training/diffusion_loss", diff_loss.item(),
-                                  step=iteration)
-            experiment.log_metric("training/encoder_grad_norm", enc_grad_norm,
-                                  step=iteration)
-            experiment.log_metric("training/decoder_grad_norm", dec_grad_norm,
-                                  step=iteration)
-            experiment.log_metric("learning_rate", current_lr,
-                                  step=iteration)
+            if iteration % log_to_file_every == 0:
+                experiment.log_metric("duration_loss/training", dur_loss.item(),
+                                    step=iteration)
+                experiment.log_metric("prior_loss/training", prior_loss.item(),
+                                    step=iteration)
+                experiment.log_metric("diffusion_loss/training", diff_loss.item(),
+                                    step=iteration)
+                experiment.log_metric("encoder_grad_norm/training", enc_grad_norm,
+                                    step=iteration)
+                experiment.log_metric("decoder_grad_norm/training", dec_grad_norm,
+                                    step=iteration)
+                experiment.log_metric("learning_rate", current_lr,
+                                    step=iteration)
 
             dur_losses.append(dur_loss.item())
             prior_losses.append(prior_loss.item())
@@ -523,7 +558,9 @@ if __name__ == "__main__":
                        scheduler=scheduler,
                        epoch=epoch,
                        iteration=iteration,
-                       batch_index=batch_idx)
+                       batch_index=batch_idx,
+                       use_saln=use_saln,
+                       dataset_name=dataset_name)
                 
             if iteration % synthesize_every == 0:
                 synthesize_melspectrogram(model=model,
@@ -546,7 +583,9 @@ if __name__ == "__main__":
                        scheduler=scheduler,
                        epoch=epoch,
                        iteration=iteration,
-                       batch_index=batch_idx)
+                       batch_index=batch_idx,
+                       use_saln=use_saln,
+                       dataset_name=dataset_name)
             torch.cuda.empty_cache()
             quit()
 
@@ -557,6 +596,8 @@ if __name__ == "__main__":
                        scheduler=scheduler,
                        epoch=epoch,
                        iteration=iteration,
-                       batch_index=batch_idx)
+                       batch_index=batch_idx,
+                       use_saln=use_saln,
+                       dataset_name=dataset_name)
             torch.cuda.empty_cache()
             quit()

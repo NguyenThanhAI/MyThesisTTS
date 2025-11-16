@@ -14,8 +14,10 @@ import torch
 from model import monotonic_align
 from model.base import BaseModule
 from model.text_encoder import TextEncoder, UniversalTextFeatureEncoder
+from model.text_encoder import StyleTextEncoder, StyleUniversalTextFeatureEncoder
 from model.align_encoder import Aligner, ForwardSumLoss, BinLoss
 from model.variance_adaptor import VarianceAdaptor
+from model.variance_adaptor import StyleVarianceAdaptor
 from model.diffusion import Diffusion
 from model.utils import sequence_mask, generate_path, duration_loss, fix_len_compatibility
 
@@ -210,7 +212,7 @@ class GradTTSWithSpeakerEmbedding(BaseModule):
         self.encoder = TextEncoder(n_vocab=n_vocab, n_feats=n_feats, n_channels=n_enc_channels, 
                                    filter_channels=filter_channels, filter_channels_dp=filter_channels_dp, n_heads=n_heads, 
                                    n_layers=n_enc_layers, kernel_size=enc_kernel, p_dropout=enc_dropout, window_size=window_size,
-                                   spk_emb_dim=spk_emb_dim)
+                                   spk_emb_dim=spk_emb_dim, n_spks=n_spks)
         self.decoder = Diffusion(n_feats=n_feats, dim=dec_dim, n_spks=n_spks, spk_emb_dim=spk_emb_dim, beta_min=beta_min, beta_max=beta_max, pe_scale=pe_scale)
 
     @torch.no_grad()
@@ -337,6 +339,53 @@ class GradTTSWithSpeakerEmbedding(BaseModule):
         prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
         
         return dur_loss, prior_loss, diff_loss
+    
+
+class GradTTSWithSpeakerEmbeddingAndSALN(GradTTSWithSpeakerEmbedding):
+    def __init__(self, n_vocab, n_spks, spk_emb_dim, n_enc_channels, filter_channels, filter_channels_dp, 
+                 n_heads, n_enc_layers, enc_kernel, enc_dropout, window_size, 
+                 n_feats, dec_dim, beta_min, beta_max, pe_scale):
+        # super(GradTTSWithSpeakerEmbeddingAndSALN, self).__init__()
+        BaseModule.__init__(self=self)
+        self.n_vocab = n_vocab
+        self.n_spks = n_spks
+        self.spk_emb_dim = spk_emb_dim
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel = enc_kernel
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.n_feats = n_feats
+        self.dec_dim = dec_dim
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+        self.pe_scale = pe_scale
+
+        self.encoder = StyleTextEncoder(
+            n_vocab=n_vocab, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+        self.decoder = Diffusion(
+            n_feats=n_feats, 
+            dim=dec_dim, 
+            n_spks=n_spks, 
+            spk_emb_dim=spk_emb_dim, 
+            beta_min=beta_min, 
+            beta_max=beta_max, 
+            pe_scale=pe_scale
+        )
 
 
 
@@ -507,4 +556,222 @@ class VarianceAdaptorGradTTS(BaseModule):
         
         large_total_loss = diff_loss + total_loss
         
+        return large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, diff_loss
+
+
+class StyleVarianceAdaptorGradTTS(BaseModule):
+    def __init__(self, n_vocab: int, n_enc_channels: int, filter_channels: int, 
+                 n_heads: int, n_enc_layers: int, enc_kernel: int, enc_dropout: int, window_size: int, 
+                 n_feats, dec_dim, beta_min, beta_max, pe_scale, stats_file_path,
+                 n_bins, pitch_feature_level, energy_feature_level,
+                 pitch_quantization, energy_quantization, variance_dims,
+                 spk_emb_dim: int):
+        super(StyleVarianceAdaptorGradTTS, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel = enc_kernel
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.n_feats = n_feats
+        self.dec_dim = dec_dim
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+        self.pe_scale = pe_scale
+        self.stats_file_path = stats_file_path
+        self.n_bins = n_bins
+        self.pitch_feature_level = pitch_feature_level
+        self.energy_feature_level = energy_feature_level
+        self.pitch_quantization = pitch_quantization
+        self.energy_quantization = energy_quantization
+        self.variance_dims = variance_dims
+        self.spk_emb_dim = spk_emb_dim
+
+        self.pre_encoder = StyleUniversalTextFeatureEncoder(
+            n_vocab=self.n_vocab,
+            n_feats=self.n_enc_channels,
+            n_channels=self.n_enc_channels,
+            filter_channels=self.filter_channels,
+            n_heads=self.n_heads,
+            n_layers=self.n_enc_layers,
+            kernel_size=self.enc_kernel,
+            p_dropout=self.enc_dropout,
+            window_size=self.window_size,
+            spk_emb_dim=self.spk_emb_dim,
+        )
+
+        self.post_encoder = StyleUniversalTextFeatureEncoder(
+            n_vocab=None,
+            n_feats=self.n_feats,
+            n_channels=self.n_enc_channels,
+            filter_channels=self.filter_channels,
+            n_heads=self.n_heads,
+            n_layers=self.n_enc_layers,
+            kernel_size=self.enc_kernel,
+            p_dropout=self.enc_dropout,
+            window_size=self.window_size,
+            spk_emb_dim=self.spk_emb_dim,
+        )
+
+        self.variance_adaptor = StyleVarianceAdaptor(
+            stats_file_path=self.stats_file_path,
+            in_channels=self.n_enc_channels,
+            filter_channels=self.filter_channels,
+            kernel_size=self.enc_kernel,
+            p_dropout=self.enc_dropout,
+            n_bins=self.n_bins,
+            pitch_feature_level=self.pitch_feature_level,
+            energy_feature_level=self.energy_feature_level,
+            pitch_quantization=self.pitch_quantization,
+            energy_quantization=self.energy_quantization,
+            variance_dims=self.n_enc_channels,
+            spk_emb_dim=spk_emb_dim
+        )
+
+        self.decoder = Diffusion(n_feats=self.n_feats, 
+                                 dim=self.dec_dim, 
+                                 beta_min=self.beta_min, 
+                                 beta_max=self.beta_max, 
+                                 pe_scale=self.pe_scale,
+                                 n_spks=2,
+                                 spk_emb_dim=spk_emb_dim)
+        
+        self.loss = TotalLoss(
+            pitch_feature_level=self.pitch_feature_level,
+            energy_feature_level=self.energy_feature_level
+        )
+
+    @torch.no_grad
+    def forward(self, x, x_lengths, n_timesteps, temperature=1.0, stoc=False, spk: torch.Tensor=None):
+        """
+        Generates mel-spectrogram from text. Returns:
+            1. encoder outputs
+            2. decoder outputs
+            3. generated alignment
+        
+        Args:
+            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
+            x_lengths (torch.Tensor): lengths of texts in batch.
+            n_timesteps (int): number of steps to use for reverse diffusion in decoder.
+            temperature (float, optional): controls variance of terminal distribution.
+            stoc (bool, optional): flag that adds stochastic term to the decoder sampler.
+                Usually, does not provide synthesis improvements.
+            spk (torch.Tensor): speaker embedding tensor.
+        """
+        x, x_lengths = self.relocate_input([x, x_lengths])
+
+        # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
+
+        encoded_phonemes, x_mask = self.pre_encoder(
+            x=x, 
+            x_lengths=x_lengths, 
+            spk_emb=spk
+        )
+
+        encoded_phonemes_dp = encoded_phonemes.detach()
+
+        adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor.forward(
+            x=encoded_phonemes_dp, 
+            x_mask=x_mask,
+            spk_emb=spk
+        )
+
+        # w = torch.exp(input=log_duration_prediction) * x_mask
+        # w_ceil = torch.ceil(input=w) * length_scale
+        # y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+        y_max_length = int(y_lengths.max())
+
+        mu_y, y_mask = self.post_encoder(
+            x=adjusted_encoded_phonemes, 
+            x_lengths=y_lengths,
+            spk_emb=spk
+        )
+
+        encoder_outputs = mu_y[:, :, :y_max_length]
+
+        # Sample latent representation from terminal distribution N(mu_y, I)
+        z = mu_y + torch.randn_like(input=mu_y, device=mu_y.device) / temperature
+        # Generate sample by performing reverse dynamics
+        decoder_outputs = self.decoder.forward(
+            z=z, 
+            y_mask=y_mask, 
+            mu=mu_y, 
+            n_timesteps=n_timesteps, 
+            stoc=stoc, 
+            spk=spk
+        )
+        decoder_outputs = decoder_outputs[:, :, :y_max_length]
+
+        return encoder_outputs, decoder_outputs, pitch_prediction, energy_prediction, duration_rounded
+    
+    def compute_loss(self, x, x_lengths, y, y_lengths, duration_target, pitch_target, energy_target, spk):
+        """
+        Computes 7 losses:
+            1. duration loss: loss between predicted token durations and those extracted by Monotinic Alignment Search (MAS).
+            2. prior loss: loss between mel-spectrogram and encoder outputs.
+            3. diffusion loss: loss between gaussian noise and its reconstruction by diffusion-based decoder.
+            4. pitch loss: pitch loss
+            5. energy loss: energy loss
+        Args:
+            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
+            x_lengths (torch.Tensor): lengths of texts in batch.
+            y (torch.Tensor): batch of corresponding mel-spectrograms.
+            y_lengths (torch.Tensor): lengths of mel-spectrograms in batch.
+            spk (torch.Tensor): speaker embedding tensor.
+        """
+        x, x_lengths, y, y_lengths = self.relocate_input([x, x_lengths, y, y_lengths])
+
+        encoded_phonemes, x_mask = self.pre_encoder(
+            x=x, 
+            x_lengths=x_lengths,
+            spk_emb=spk
+        )
+
+        # encoded_phonemes_dp = encoded_phonemes.detach()
+
+        y_max_length = y.shape[-1]
+        y_mask = sequence_mask(length=y_lengths, max_length=y_max_length)
+        y_mask = y_mask.unsqueeze(1)
+
+        adjusted_encoded_phonemes, pitch_prediction, energy_prediction, log_duration_prediction, duration_rounded, y_lengths = self.variance_adaptor(
+            x=encoded_phonemes,
+            x_mask=x_mask,
+            spk_emb=spk,
+            y_max_length=y_max_length,
+            duration_target=duration_target,
+            pitch_target=pitch_target,
+            energy_target=energy_target
+        )
+
+        mu_y, y_mask = self.post_encoder(
+            x=adjusted_encoded_phonemes, 
+            x_lengths=y_lengths,
+            spk_emb=spk
+        )
+
+        total_loss, mel_loss, pitch_loss, energy_loss, dur_loss = self.loss(
+            x_lengths=x_lengths,
+            y_lengths=y_lengths,
+            mel_target=y,
+            pitch_target=pitch_target,
+            energy_target=energy_target,
+            duration_target=duration_target,
+            mel_prediction=mu_y,
+            pitch_prediction=pitch_prediction,
+            energy_prediction=energy_prediction,
+            log_duration_prediction=log_duration_prediction
+        )
+
+        # Compute loss of score-based decoder
+        diff_loss, xt = self.decoder.compute_loss(
+            x0=y, 
+            mask=y_mask, 
+            mu=mu_y, 
+            spk=spk
+        )
+
+        large_total_loss = diff_loss + total_loss
+
         return large_total_loss, mel_loss, pitch_loss, energy_loss, dur_loss, diff_loss

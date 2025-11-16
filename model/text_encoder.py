@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from model.base import BaseModule, LayerNorm, SinusoidalPositionalEncoding
+from model.base import BaseModule, LayerNorm, SinusoidalPositionalEncoding, StyleAdaptiveLayerNorm
 from model.utils import sequence_mask, convert_pad_shape, fix_len_compatibility
     
 
@@ -79,6 +79,43 @@ class DurationPredictor(BaseModule):
         x = self.conv_2(x * x_mask)
         x = torch.relu(input=x)
         x = self.norm_2(x)
+        x = self.drop(x)
+        x = self.proj(x * x_mask)
+        return x * x_mask
+    
+
+class StyleDurationPredictor(BaseModule):
+    def __init__(self, in_channels, filter_channels, kernel_size, spk_emb_dim,
+                 p_dropout):
+        super(StyleDurationPredictor, self).__init__()
+        self.in_channels = in_channels
+        self.filter_channels = filter_channels
+        self.spk_emb_dim = spk_emb_dim
+        self.p_dropout = p_dropout
+
+        self.drop = torch.nn.Dropout(p=p_dropout)
+        self.conv_1 = torch.nn.Conv1d(in_channels=in_channels, 
+                                      out_channels=filter_channels, 
+                                      kernel_size=kernel_size, 
+                                      padding=kernel_size//2)
+        self.saln_1 = StyleAdaptiveLayerNorm(in_channel=filter_channels, style_dim=spk_emb_dim)
+        self.conv_2 = torch.nn.Conv1d(in_channels=filter_channels, 
+                                      out_channels=filter_channels, 
+                                      kernel_size=kernel_size, 
+                                      padding=kernel_size//2)
+        self.saln_2 = StyleAdaptiveLayerNorm(in_channel=filter_channels, style_dim=spk_emb_dim)
+        self.proj = torch.nn.Conv1d(in_channels=filter_channels, 
+                                    out_channels=1, 
+                                    kernel_size=1)
+
+    def forward(self, x, x_mask, spk_emb):
+        x = self.conv_1(x * x_mask)
+        x = self.saln_1(x, spk_emb)
+        x = torch.relu(input=x)
+        x = self.drop(x)
+        x = self.conv_2(x * x_mask)
+        x = self.saln_2(x, spk_emb)
+        x = torch.relu(input=x)
         x = self.drop(x)
         x = self.proj(x * x_mask)
         return x * x_mask
@@ -232,6 +269,39 @@ class FFN(BaseModule):
         return x * x_mask
     
 
+class StyleFFN(BaseModule):
+    def __init__(self, in_channels, out_channels, filter_channels, kernel_size, spk_emb_dim,
+                 p_dropout=0.0):
+        super(StyleFFN, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.filter_channels = filter_channels
+        self.kernel_size = kernel_size
+        self.spk_emb_dim = spk_emb_dim
+        self.p_dropout = p_dropout
+
+        self.conv_1 = torch.nn.Conv1d(in_channels=in_channels, 
+                                      out_channels=filter_channels, 
+                                      kernel_size=kernel_size, 
+                                      padding=kernel_size//2)
+        self.saln_1 = StyleAdaptiveLayerNorm(in_channel=filter_channels, style_dim=spk_emb_dim)
+        self.conv_2 = torch.nn.Conv1d(in_channels=filter_channels, 
+                                      out_channels=out_channels, 
+                                      kernel_size=kernel_size, 
+                                      padding=kernel_size//2)
+        self.saln_2 = StyleAdaptiveLayerNorm(in_channel=out_channels, style_dim=spk_emb_dim)
+        self.drop = torch.nn.Dropout(p=p_dropout)
+
+    def forward(self, x, x_mask, spk_emb):
+        x = self.conv_1(x * x_mask)
+        x = self.saln_1(x, spk_emb)
+        x = torch.relu(input=x)
+        x = self.drop(x)
+        x = self.conv_2(x * x_mask)
+        x = self.saln_2(x, spk_emb)
+        return x * x_mask
+    
+
 class Encoder(BaseModule):
     def __init__(self, hidden_channels, filter_channels, n_heads, n_layers, 
                  kernel_size=1, p_dropout=0.0, window_size=None, **kwargs):
@@ -273,6 +343,63 @@ class Encoder(BaseModule):
             y = self.ffn_layers[i](x, x_mask)
             y = self.drop(y)
             x = self.norm_layers_2[i](x + y)
+        x = x * x_mask
+        return x
+    
+
+class StyleEncoder(BaseModule):
+    def __init__(self, hidden_channels, filter_channels, n_heads, n_layers,
+                 spk_emb_dim,
+                 kernel_size=1, p_dropout=0.0, window_size=None, **kwargs):
+        super(StyleEncoder, self).__init__()
+        self.hidden_channels = hidden_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+
+        self.drop = torch.nn.Dropout(p_dropout)
+        self.attn_layers = torch.nn.ModuleList()
+        self.norm_layers_1 = torch.nn.ModuleList()
+        self.style_ffn_layers_1 = torch.nn.ModuleList()
+        self.norm_layers_2 = torch.nn.ModuleList()
+        self.style_ffn_layers_2 = torch.nn.ModuleList()
+
+        for _ in range(self.n_layers):
+            self.attn_layers.append(MultiHeadAttention(channels=hidden_channels,
+                                                       out_channels=hidden_channels,
+                                                       n_heads=n_heads, 
+                                                       window_size=window_size, 
+                                                       p_dropout=p_dropout))
+            self.norm_layers_1.append(LayerNorm(channels=hidden_channels))
+            self.style_ffn_layers_1.append(StyleFFN(in_channels=hidden_channels, 
+                                                    out_channels=hidden_channels,
+                                                    filter_channels=filter_channels, 
+                                                    kernel_size=kernel_size,
+                                                    spk_emb_dim=spk_emb_dim,
+                                                    p_dropout=p_dropout))
+            self.norm_layers_2.append(LayerNorm(channels=hidden_channels))
+            self.style_ffn_layers_2.append(StyleFFN(in_channels=hidden_channels, 
+                                                    out_channels=hidden_channels,
+                                                    filter_channels=filter_channels, 
+                                                    kernel_size=kernel_size,
+                                                    spk_emb_dim=spk_emb_dim,
+                                                    p_dropout=p_dropout))
+
+    def forward(self, x, x_mask, spk_emb):
+        attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
+        for i in range(self.n_layers):
+            x = x * x_mask
+            y = self.attn_layers[i](x, x, attn_mask)
+            y = self.drop(y)
+            x = self.norm_layers_1[i](x + y)
+            y = self.style_ffn_layers_1[i](x, x_mask, spk_emb)
+            y = self.drop(y)
+            x = self.norm_layers_2[i](x + y)
+            x = self.style_ffn_layers_2[i](x, x_mask, spk_emb)
         x = x * x_mask
         return x
     
@@ -340,7 +467,72 @@ class TextEncoder(BaseModule):
         logw = self.proj_w(x_dp, x_mask)
 
         return mu, logw, x_mask
+    
 
+class StyleTextEncoder(BaseModule):
+    def __init__(self, n_vocab, n_feats, n_channels, filter_channels, 
+                 filter_channels_dp, n_heads, n_layers, kernel_size, 
+                 p_dropout, window_size=None, spk_emb_dim=64):
+        
+        super(StyleTextEncoder, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_channels = n_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+
+        self.emb = torch.nn.Embedding(num_embeddings=n_vocab, embedding_dim=n_channels)
+
+        self.pos_emb = SinusoidalPositionalEncoding(dim=n_channels)
+        torch.nn.init.normal_(tensor=self.emb.weight, mean=0.0, std=n_channels**-0.5)
+
+        self.prenet = ConvReluNorm(in_channels=n_channels, 
+                                   hidden_channels=n_channels, 
+                                   out_channels=n_channels, 
+                                   kernel_size=5, 
+                                   n_layers=3, 
+                                   p_dropout=0.5)
+        
+        self.encoder = StyleEncoder(hidden_channels=n_channels,
+                                    filter_channels=filter_channels,
+                                    n_heads=n_heads, 
+                                    n_layers=n_layers, 
+                                    kernel_size=kernel_size, 
+                                    p_dropout=p_dropout, 
+                                    window_size=window_size,
+                                    spk_emb_dim=spk_emb_dim)
+        
+        self.proj_m = torch.nn.Conv1d(in_channels=n_channels, 
+                                      out_channels=n_feats, 
+                                      kernel_size=1)
+        self.proj_w = StyleDurationPredictor(in_channels=n_channels, 
+                                             filter_channels=filter_channels_dp, 
+                                             kernel_size=kernel_size,
+                                             spk_emb_dim=spk_emb_dim,
+                                             p_dropout=p_dropout)
+        
+    def forward(self, x, x_lengths, spk_emb):  
+        x = self.emb(x) * math.sqrt(self.n_channels)
+        x = self.pos_emb(x)
+        x = torch.transpose(x, 1, -1)
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
+        x = self.prenet(x, x_mask)
+
+        x = self.encoder(x, x_mask, spk_emb)
+
+        mu = self.proj_m(x) * x_mask
+
+        x_dp = torch.detach(x)
+        logw = self.proj_w(x_dp, x_mask, spk_emb)
+
+        return mu, logw, x_mask
 
 
 class UniversalTextFeatureEncoder(BaseModule):
@@ -405,6 +597,76 @@ class UniversalTextFeatureEncoder(BaseModule):
         x = self.prenet(x, x_mask)
 
         x = self.encoder(x, x_mask)
+
+        out = self.proj_m(x) * x_mask
+
+        return out, x_mask
+    
+
+class StyleUniversalTextFeatureEncoder(BaseModule):
+    def __init__(self, n_vocab, n_feats, 
+                 n_channels, filter_channels, n_heads, 
+                 n_layers, kernel_size, 
+                 p_dropout, window_size=None, spk_emb_dim=64):
+        
+        super(StyleUniversalTextFeatureEncoder, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_channels = n_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+
+        if self.n_vocab is not None:
+            self.emb = torch.nn.Embedding(num_embeddings=n_vocab, embedding_dim=n_channels)
+            torch.nn.init.normal_(tensor=self.emb.weight, mean=0.0, std=n_channels**-0.5)
+        else:
+            self.emb = None
+
+        self.pos_emb = SinusoidalPositionalEncoding(dim=n_channels)
+
+        self.prenet = ConvReluNorm(in_channels=n_channels, 
+                                   hidden_channels=n_channels, 
+                                   out_channels=n_channels, 
+                                   kernel_size=5, 
+                                   n_layers=3, 
+                                   p_dropout=0.5)
+        
+
+        self.encoder = StyleEncoder(hidden_channels=n_channels,
+                                    filter_channels=filter_channels,
+                                    n_heads=n_heads, 
+                                    n_layers=n_layers, 
+                                    kernel_size=kernel_size, 
+                                    p_dropout=p_dropout,
+                                    window_size=window_size,
+                                    spk_emb_dim=spk_emb_dim)
+        
+        self.proj_m = torch.nn.Conv1d(in_channels=n_channels, 
+                                      out_channels=n_feats, 
+                                      kernel_size=1)
+        
+    def forward(self, x, x_lengths, spk_emb):
+        if self.emb is not None:
+            x = self.emb(x) * math.sqrt(self.n_channels)
+            x = self.pos_emb(x)
+            x = torch.transpose(x, 1, -1)
+            x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        else:
+            x = torch.transpose(x, 1, -1)
+            x = self.pos_emb(x)
+            x = torch.transpose(x, 1, -1)
+            y_max_length = int(x_lengths.max())
+            y_max_length_ = fix_len_compatibility(length=y_max_length)
+            x_mask = torch.unsqueeze(sequence_mask(x_lengths, y_max_length_), 1).to(x.dtype)
+        
+        x = self.prenet(x, x_mask)
+
+        x = self.encoder(x, x_mask, spk_emb)
 
         out = self.proj_m(x) * x_mask
 

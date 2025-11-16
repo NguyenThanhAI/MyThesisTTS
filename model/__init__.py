@@ -7,3 +7,4 @@
 # MIT License for more details.
 
 from .tts import GradTTS, VarianceAdaptorGradTTS, GradTTSWithSpeakerEmbedding
+from .tts import GradTTSWithSpeakerEmbeddingAndSALN, StyleVarianceAdaptorGradTTS
