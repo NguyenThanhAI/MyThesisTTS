@@ -191,7 +191,7 @@ def evaluate_losses(model: GradTTSWithSpeakerEmbedding, val_loader: DataLoader, 
         val_diff_loss = diffusion_loss_accumulative / num_samples
 
         print(f"Evaluate at step: {step}, val duration loss: {val_dur_loss}, val prior loss: {val_prior_loss}, val diff loss: {val_diff_loss}")
-        experiment.log_metric("duration_lossval", val_dur_loss,
+        experiment.log_metric("duration_loss/val", val_dur_loss,
                                step=step)
         experiment.log_metric("prior_loss/val", val_prior_loss,
                                step=step)
