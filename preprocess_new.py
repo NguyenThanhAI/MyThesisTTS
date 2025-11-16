@@ -384,6 +384,7 @@ class Preprocessor:
                     - np.round(s * self.sampling_rate / self.hop_length)
                 )
             )
+            # durations.append(int((e - s) * self.sampling_rate / self.hop_length))
 
         # Trim tailing silences
         phones = phones[:end_idx]
