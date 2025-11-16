@@ -101,6 +101,35 @@ def plot_mel_with_pitch_energy(tensor, pitch_predict: np.ndarray, energy_predict
     return fig
 
 
+def plot_mel_with_pitch_energy_comet(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
+    pitch_min, pitch_max, energy_min, energy_max = stats
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(12, 3))
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation='none')
+    plt.colorbar(im, ax=ax)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Mel-Spectrogram")
+
+    # Tạo trục phụ để vẽ pitch
+    ax_pitch = ax.twinx()
+    ax_pitch.plot(pitch_predict, color="tomato", label="Pitch")
+    ax_pitch.set_ylim(pitch_min, pitch_max)
+    ax_pitch.set_ylabel("Pitch (F0)", color="tomato")
+    ax_pitch.tick_params(axis="y", labelcolor="tomato")
+
+    ax_energy = ax.twinx()
+    ax_energy.spines["right"].set_position(("outward", 60))  # Đẩy trục energy ra ngoài
+    ax_energy.plot(energy_predict, color="darkviolet", label="Energy")
+    ax_energy.set_ylim(energy_min, energy_max)
+    ax_energy.set_ylabel("Energy", color="darkviolet")
+    ax_energy.tick_params(axis="y", labelcolor="darkviolet")
+
+    plt.tight_layout()
+
+    return fig
+
+
 def plot_tensor_with_pitch_energy(tensor, pitch_predict: np.ndarray, energy_predict: np.ndarray, stats: Tuple[float, float, float, float]):
     fig = plot_mel_with_pitch_energy(tensor=tensor, 
                                      pitch_predict=pitch_predict,
