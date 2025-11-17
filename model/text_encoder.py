@@ -289,7 +289,7 @@ class StyleFFN(BaseModule):
                                       out_channels=out_channels, 
                                       kernel_size=kernel_size, 
                                       padding=kernel_size//2)
-        self.saln_2 = StyleAdaptiveLayerNorm(in_channel=out_channels, style_dim=spk_emb_dim)
+        # self.saln_2 = StyleAdaptiveLayerNorm(in_channel=out_channels, style_dim=spk_emb_dim)
         self.drop = torch.nn.Dropout(p=p_dropout)
 
     def forward(self, x, x_mask, spk_emb):
@@ -298,7 +298,7 @@ class StyleFFN(BaseModule):
         x = torch.relu(input=x)
         x = self.drop(x)
         x = self.conv_2(x * x_mask)
-        x = self.saln_2(x, spk_emb)
+        # x = self.saln_2(x, spk_emb)
         return x * x_mask
     
 
@@ -364,9 +364,10 @@ class StyleEncoder(BaseModule):
         self.drop = torch.nn.Dropout(p_dropout)
         self.attn_layers = torch.nn.ModuleList()
         self.norm_layers_1 = torch.nn.ModuleList()
-        self.style_ffn_layers_1 = torch.nn.ModuleList()
+        # self.style_ffn_layers_1 = torch.nn.ModuleList()
+        self.style_ffn_layers = torch.nn.ModuleList()
         self.norm_layers_2 = torch.nn.ModuleList()
-        self.style_ffn_layers_2 = torch.nn.ModuleList()
+        # self.style_ffn_layers_2 = torch.nn.ModuleList()
 
         for _ in range(self.n_layers):
             self.attn_layers.append(MultiHeadAttention(channels=hidden_channels,
@@ -375,19 +376,19 @@ class StyleEncoder(BaseModule):
                                                        window_size=window_size, 
                                                        p_dropout=p_dropout))
             self.norm_layers_1.append(LayerNorm(channels=hidden_channels))
-            self.style_ffn_layers_1.append(StyleFFN(in_channels=hidden_channels, 
-                                                    out_channels=hidden_channels,
-                                                    filter_channels=filter_channels, 
-                                                    kernel_size=kernel_size,
-                                                    spk_emb_dim=spk_emb_dim,
-                                                    p_dropout=p_dropout))
+            self.style_ffn_layers.append(StyleFFN(in_channels=hidden_channels, 
+                                                  out_channels=hidden_channels,
+                                                  filter_channels=filter_channels, 
+                                                  kernel_size=kernel_size,
+                                                  spk_emb_dim=spk_emb_dim,
+                                                  p_dropout=p_dropout))
             self.norm_layers_2.append(LayerNorm(channels=hidden_channels))
-            self.style_ffn_layers_2.append(StyleFFN(in_channels=hidden_channels, 
-                                                    out_channels=hidden_channels,
-                                                    filter_channels=filter_channels, 
-                                                    kernel_size=kernel_size,
-                                                    spk_emb_dim=spk_emb_dim,
-                                                    p_dropout=p_dropout))
+            # self.style_ffn_layers_2.append(StyleFFN(in_channels=hidden_channels, 
+            #                                         out_channels=hidden_channels,
+            #                                         filter_channels=filter_channels, 
+            #                                         kernel_size=kernel_size,
+            #                                         spk_emb_dim=spk_emb_dim,
+            #                                         p_dropout=p_dropout))
 
     def forward(self, x, x_mask, spk_emb):
         attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
@@ -396,10 +397,10 @@ class StyleEncoder(BaseModule):
             y = self.attn_layers[i](x, x, attn_mask)
             y = self.drop(y)
             x = self.norm_layers_1[i](x + y)
-            y = self.style_ffn_layers_1[i](x, x_mask, spk_emb)
+            y = self.style_ffn_layers[i](x, x_mask, spk_emb)
             y = self.drop(y)
             x = self.norm_layers_2[i](x + y)
-            x = self.style_ffn_layers_2[i](x, x_mask, spk_emb)
+            # x = self.style_ffn_layers_2[i](x, x_mask, spk_emb)
         x = x * x_mask
         return x
     

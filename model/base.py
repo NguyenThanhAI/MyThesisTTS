@@ -148,6 +148,9 @@ class StyleAdaptiveLayerNorm(BaseModule):
         gamma, beta = style.chunk(2, dim=-1)
         gamma = gamma.transpose(1, 2)
         beta = beta.transpose(1, 2)
+
+        gamma = 1.0 + 0.1 * torch.tanh(gamma)
+        beta  =       0.1 * torch.tanh(beta)
         
         out = self.norm(input)
         out = gamma * out + beta
