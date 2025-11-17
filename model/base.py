@@ -130,13 +130,27 @@ class AffineLinear(BaseModule):
 
     def forward(self, input):
         return self.affine(input)
+    
+class NormSALN(BaseModule):
+    def __init__(self, channels, eps=1e-4):
+        super(NormSALN, self).__init__()
+        self.channels = channels
+        self.eps = eps
+
+    def forward(self, x):
+        mean = torch.mean(input=x, dim=1, keepdim=True)
+        variance = torch.mean(input=(x - mean)**2, dim=1, keepdim=True)
+
+        x = (x - mean) * torch.rsqrt(variance + self.eps)
+
+        return x
 
 
 class StyleAdaptiveLayerNorm(BaseModule):
     def __init__(self, in_channel, style_dim):
         super(StyleAdaptiveLayerNorm, self).__init__()
         self.in_channel = in_channel
-        self.norm = LayerNorm(channels=in_channel)
+        self.norm = NormSALN(channels=in_channel)
 
         self.style = AffineLinear(style_dim, in_channel * 2)
         self.style.affine.bias.data[:in_channel] = 1
