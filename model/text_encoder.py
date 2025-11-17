@@ -511,11 +511,15 @@ class StyleTextEncoder(BaseModule):
         self.proj_m = torch.nn.Conv1d(in_channels=n_channels, 
                                       out_channels=n_feats, 
                                       kernel_size=1)
-        self.proj_w = StyleDurationPredictor(in_channels=n_channels, 
-                                             filter_channels=filter_channels_dp, 
-                                             kernel_size=kernel_size,
-                                             spk_emb_dim=spk_emb_dim,
-                                             p_dropout=p_dropout)
+        # self.proj_w = StyleDurationPredictor(in_channels=n_channels, 
+        #                                      filter_channels=filter_channels_dp, 
+        #                                      kernel_size=kernel_size,
+        #                                      spk_emb_dim=spk_emb_dim,
+        #                                      p_dropout=p_dropout)
+        self.proj_w = DurationPredictor(in_channels=n_channels, 
+                                        filter_channels=filter_channels_dp, 
+                                        kernel_size=kernel_size, 
+                                        p_dropout=p_dropout)
         
     def forward(self, x, x_lengths, spk_emb):  
         x = self.emb(x) * math.sqrt(self.n_channels)
@@ -530,7 +534,7 @@ class StyleTextEncoder(BaseModule):
         mu = self.proj_m(x) * x_mask
 
         x_dp = torch.detach(x)
-        logw = self.proj_w(x_dp, x_mask, spk_emb)
+        logw = self.proj_w(x_dp, x_mask)
 
         return mu, logw, x_mask
 
