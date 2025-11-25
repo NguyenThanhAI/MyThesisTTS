@@ -180,6 +180,7 @@ def evaluate_losses(
 
             dur_loss, prior_loss, diff_loss = model.compute_loss(x=x, x_lengths=x_lengths,
                                                                  y=y, y_lengths=y_lengths,
+                                                                 step=1000,
                                                                  spk=spker_embed,
                                                                  out_size=out_size)
             size_of_this_batch = x.shape[0]
