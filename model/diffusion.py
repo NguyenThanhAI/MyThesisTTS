@@ -450,23 +450,23 @@ class ConsitencyTrigFlow(BaseModule):
             pe_scale=pe_scale
         )
 
-        self.target_estimator = DenoiserTrigFlow(
-            dim=dim,
-            n_spks=n_spks,
-            spk_emb_dim=spk_emb_dim,
-            pe_scale=pe_scale
-        )
-        self.target_estimator.requires_grad_(False)
-        self.copy_target_params()
+        # self.target_estimator = DenoiserTrigFlow(
+        #     dim=dim,
+        #     n_spks=n_spks,
+        #     spk_emb_dim=spk_emb_dim,
+        #     pe_scale=pe_scale
+        # )
+        # self.target_estimator.requires_grad_(False)
+        # self.copy_target_params()
 
         self.sigma_data: float=0.5
 
-    def copy_target_params(self):
-        for param, target_param in zip(
-            self.estimator.parameters(), 
-            self.target_estimator.parameters()
-        ):
-            target_param.data.copy_(param.data)
+    # def copy_target_params(self):
+    #     for param, target_param in zip(
+    #         self.estimator.parameters(), 
+    #         self.target_estimator.parameters()
+    #     ):
+    #         target_param.data.copy_(param.data)
 
     # def update_ema_target_params(self):
     #     for param, target_param in zip(
@@ -477,13 +477,13 @@ class ConsitencyTrigFlow(BaseModule):
     #             param.data, alpha=1 - self.ema_rate
     #         )
 
-    def update_ema_target_params(self):
-        with torch.no_grad():
-            for param, target_param in zip(
-                self.estimator.parameters(),
-                self.target_estimator.parameters()
-            ):
-                target_param.mul_(self.ema_rate).add_(param, alpha=1 - self.ema_rate)
+    # def update_ema_target_params(self):
+    #     with torch.no_grad():
+    #         for param, target_param in zip(
+    #             self.estimator.parameters(),
+    #             self.target_estimator.parameters()
+    #         ):
+    #             target_param.mul_(self.ema_rate).add_(param, alpha=1 - self.ema_rate)
 
     def forward_diffusion(self, x0, mask, t):
         time = t.unsqueeze(-1).unsqueeze(-1) # [batch_size, 1, 1]
@@ -527,7 +527,7 @@ class ConsitencyTrigFlow(BaseModule):
         return self.reverse_diffusion(z=z, mask=mask, mu=mu, n_timesteps=n_timesteps, spk=spk)
     
     def sample_t(self, x0):
-        p_mean = -2
+        p_mean = -0.8
         p_std = 1.6
 
         t = torch.randn(x0.shape[0], device=x0.device, requires_grad=False) # [batch_size]
@@ -558,32 +558,31 @@ class ConsitencyTrigFlow(BaseModule):
 
         model_wrapper_partial = partial(
             self.model_wrapper,
-            estimator=self.target_estimator,
+            estimator=self.estimator,
             mask=mask,
             mu=mu,
             spk=spk
         )
 
-        F_theta, F_theta_grad, _ = torch.func.jvp(
+        F_theta, F_theta_grad, logvar = torch.func.jvp(
             model_wrapper_partial,
             (x_t / self.sigma_data, time),
             (v_x, v_t),
             has_aux=True
         )
-
-        # logvar = logvar.view(-1, 1, 1)
+        logvar = logvar.view(-1, 1, 1)
         F_theta_grad = F_theta_grad.detach()
         F_theta_minus = F_theta.detach()
 
-        F_theta, logvar = self.estimator.forward(
-            x=x_t / self.sigma_data,
-            mask=mask,
-            mu=mu,
-            t=time.flatten(),
-            spk=spk
-        )
+        # F_theta, logvar = self.estimator.forward(
+        #     x=x_t / self.sigma_data,
+        #     mask=mask,
+        #     mu=mu,
+        #     t=time.flatten(),
+        #     spk=spk
+        # )
 
-        logvar = logvar.view(-1, 1, 1)
+        # logvar = logvar.view(-1, 1, 1)
 
         r = min(1.0, step / self.num_warmup_steps)
 
@@ -601,9 +600,12 @@ class ConsitencyTrigFlow(BaseModule):
 
         g = g / (g_norm + 0.1)
 
-        weight = 1
+
+        # weight = 1
+        prior_weight = 1 / (self.sigma_data * torch.tan(time))
         # loss = (weight / (torch.exp(logvar) * x0[0].numel())) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) + logvar
-        loss = (weight / (torch.exp(logvar))) * torch.square(F_theta - F_theta_minus - g) + logvar
+        # loss = (weight / (torch.exp(logvar))) * torch.square(F_theta - F_theta_minus - g) + logvar
+        loss = (torch.exp(logvar) * prior_weight / x0[0].numel()) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) - logvar
         loss = loss.mean()
         # loss_g = (weight / torch.exp(logvar)) * torch.square(g) + logvar
         # loss_g = loss_g.mean()

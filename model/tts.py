@@ -402,9 +402,9 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
             pe_scale=pe_scale
         )
 
-    def update_ema_target_params(self):
-        if hasattr(self.decoder, "update_ema_target_params"):
-            self.decoder.update_ema_target_params()
+    # def update_ema_target_params(self):
+    #     if hasattr(self.decoder, "update_ema_target_params"):
+    #         self.decoder.update_ema_target_params()
 
     @torch.no_grad
     def forward(self, x, x_lengths, n_timesteps, temperature=1.0, spk: torch.Tensor=None, length_scale=1.0):

@@ -534,7 +534,7 @@ if __name__ == "__main__":
             optimizer.step()
             scheduler.step()
 
-            model.update_ema_target_params()
+            # model.update_ema_target_params()
 
             current_lr = scheduler.get_last_lr()[0]
             if iteration % log_to_file_every == 0:
