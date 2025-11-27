@@ -8,4 +8,5 @@
 
 from .tts import GradTTS, VarianceAdaptorGradTTS, GradTTSWithSpeakerEmbedding
 from .tts import GradTTSWithSpeakerEmbeddingAndSALN, StyleVarianceAdaptorGradTTS
+from .tts import GradTTSWithSpeakerEmbeddingAdditive
 from .tts import ConsistencyTrigFlowWithSpeakerEmbedding

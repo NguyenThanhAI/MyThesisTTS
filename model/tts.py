@@ -15,6 +15,7 @@ from model import monotonic_align
 from model.base import BaseModule
 from model.text_encoder import TextEncoder, UniversalTextFeatureEncoder
 from model.text_encoder import StyleTextEncoder, StyleUniversalTextFeatureEncoder
+from model.text_encoder import StyleAdditiveTextEncoder
 from model.align_encoder import Aligner, ForwardSumLoss, BinLoss
 from model.variance_adaptor import VarianceAdaptor
 from model.variance_adaptor import StyleVarianceAdaptor
@@ -577,6 +578,51 @@ class GradTTSWithSpeakerEmbeddingAndSALN(GradTTSWithSpeakerEmbedding):
             pe_scale=pe_scale
         )
 
+class GradTTSWithSpeakerEmbeddingAdditive(GradTTSWithSpeakerEmbedding):
+    def __init__(self, n_vocab, n_spks, spk_emb_dim, n_enc_channels, filter_channels, filter_channels_dp, 
+                 n_heads, n_enc_layers, enc_kernel, enc_dropout, window_size, 
+                 n_feats, dec_dim, beta_min, beta_max, pe_scale):
+        BaseModule.__init__(self=self)
+        self.n_vocab = n_vocab
+        self.n_spks = n_spks
+        self.spk_emb_dim = spk_emb_dim
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel = enc_kernel
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.n_feats = n_feats
+        self.dec_dim = dec_dim
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+        self.pe_scale = pe_scale
+
+        self.encoder = StyleAdditiveTextEncoder(
+            n_vocab=n_vocab, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+
+        self.decoder = Diffusion(
+            n_feats=n_feats, 
+            dim=dec_dim, 
+            n_spks=n_spks, 
+            spk_emb_dim=spk_emb_dim, 
+            beta_min=beta_min, 
+            beta_max=beta_max, 
+            pe_scale=pe_scale
+        )
 
 
 class VarianceAdaptorGradTTS(BaseModule):

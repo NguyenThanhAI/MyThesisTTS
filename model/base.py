@@ -169,6 +169,19 @@ class StyleAdaptiveLayerNorm(BaseModule):
         out = self.norm(input)
         out = gamma * out + beta
         return out
+    
+class StyleAdditiveLayerNorm(BaseModule):
+    def __init__(self, in_channel, style_dim):
+        super(StyleAdditiveLayerNorm, self).__init__()
+        self.in_channel = in_channel
+        self.norm = NormSALN(channels=in_channel)
+        self.style = AffineLinear(style_dim, in_channel)
+
+    def forward(self, input, style_code):
+        style = self.style(style_code).unsqueeze(1)
+        out = self.norm(input)
+        out = out + style.transpose(1, 2)
+        return out
 
     
 

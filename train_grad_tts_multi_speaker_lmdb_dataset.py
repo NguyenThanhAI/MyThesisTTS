@@ -21,6 +21,7 @@ from comet_ml import Experiment, ExistingExperiment
 import params
 from model import GradTTSWithSpeakerEmbedding
 from model import GradTTSWithSpeakerEmbeddingAndSALN
+from model import GradTTSWithSpeakerEmbeddingAdditive
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
 from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
@@ -289,6 +290,7 @@ def get_args():
     parser.add_argument("--comet_existing_experiment_id", type=str, default=None)
 
     parser.add_argument("--use_saln", type=str2bool, default=True)
+    parser.add_argument("--use_additive", type=str2bool, default=True)
     parser.add_argument("--log_to_file_every", type=int, default=1)
     parser.add_argument("--dataset_name", type=str, default="LJSpeech")
 
@@ -348,6 +350,7 @@ if __name__ == "__main__":
     comet_existing_experiment_id = args.comet_existing_experiment_id
 
     use_saln = args.use_saln
+    use_additive = args.use_additive
     log_to_file_every = args.log_to_file_every
     dataset_name = args.dataset_name
 
@@ -405,9 +408,9 @@ if __name__ == "__main__":
         shuffle=False
     )
     print("Initializing model...")
-    if not use_saln:
-        print("Using GradTTS with Speaker Embedding model")
-        model = GradTTSWithSpeakerEmbedding(
+    if use_additive:
+        print("Using GradTTS with Speaker Embedding Additive model")
+        model = GradTTSWithSpeakerEmbeddingAdditive(
             n_vocab=nsymbols,
             n_spks=2,
             spk_emb_dim=512,
@@ -426,25 +429,47 @@ if __name__ == "__main__":
             pe_scale=pe_scale
         ).to(device=device)
     else:
-        print("Using GradTTS with Speaker Embedding and SALN model")
-        model = GradTTSWithSpeakerEmbeddingAndSALN(
-            n_vocab=nsymbols,
-            n_spks=2,
-            spk_emb_dim=512,
-            n_enc_channels=n_enc_channels,
-            filter_channels=filter_channels,
-            filter_channels_dp=filter_channels_dp,
-            n_heads=n_heads,
-            n_enc_layers=n_enc_layers,
-            enc_kernel=enc_kernel,
-            enc_dropout=enc_dropout, 
-            window_size=window_size, 
-            n_feats=n_feats, 
-            dec_dim=dec_dim, 
-            beta_min=beta_min, 
-            beta_max=beta_max, 
-            pe_scale=pe_scale
-        ).to(device=device)
+
+        if not use_saln:
+            print("Using GradTTS with Speaker Embedding model")
+            model = GradTTSWithSpeakerEmbedding(
+                n_vocab=nsymbols,
+                n_spks=2,
+                spk_emb_dim=512,
+                n_enc_channels=n_enc_channels,
+                filter_channels=filter_channels,
+                filter_channels_dp=filter_channels_dp,
+                n_heads=n_heads,
+                n_enc_layers=n_enc_layers,
+                enc_kernel=enc_kernel,
+                enc_dropout=enc_dropout, 
+                window_size=window_size, 
+                n_feats=n_feats, 
+                dec_dim=dec_dim, 
+                beta_min=beta_min, 
+                beta_max=beta_max, 
+                pe_scale=pe_scale
+            ).to(device=device)
+        else:
+            print("Using GradTTS with Speaker Embedding and SALN model")
+            model = GradTTSWithSpeakerEmbeddingAndSALN(
+                n_vocab=nsymbols,
+                n_spks=2,
+                spk_emb_dim=512,
+                n_enc_channels=n_enc_channels,
+                filter_channels=filter_channels,
+                filter_channels_dp=filter_channels_dp,
+                n_heads=n_heads,
+                n_enc_layers=n_enc_layers,
+                enc_kernel=enc_kernel,
+                enc_dropout=enc_dropout, 
+                window_size=window_size, 
+                n_feats=n_feats, 
+                dec_dim=dec_dim, 
+                beta_min=beta_min, 
+                beta_max=beta_max, 
+                pe_scale=pe_scale
+            ).to(device=device)
     print("Number of encoder + duration predictor parameters: %.2fm" % (model.encoder.nparams/1e6))
     print("Number of decoder parameters: %.2fm" % (model.decoder.nparams/1e6))
     print("Total parameters: %.2fm" % (model.nparams/1e6))
