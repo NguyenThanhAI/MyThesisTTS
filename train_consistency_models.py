@@ -39,7 +39,7 @@ def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, log_d
             "batch_index": batch_index}
     print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
     add = "additive"
-    torch.save(ckpt, f=os.path.join(log_dir, f"consistency_trigflow_multi_speaker_{dataset_name}_{add}_steps_{iteration}.pt"))
+    torch.save(ckpt, f=os.path.join(log_dir, f"consistency_multi_speaker_{dataset_name}_{add}_steps_{iteration}.pt"))
 
 
 def evaluate_losses(
@@ -65,7 +65,7 @@ def evaluate_losses(
             dur_loss, prior_loss, consistency_loss, recon_loss = model.compute_loss(
                 x=x, x_lengths=x_lengths,
                 y=y, y_lengths=y_lengths,
-                step=1000,
+                step=step,
                 spk=spker_embed,
                 out_size=out_size
             )
