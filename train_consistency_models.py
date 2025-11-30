@@ -493,7 +493,8 @@ if __name__ == "__main__":
             model=model,
             val_loader=val_loader,
             experiment=experiment,
-            step=iteration
+            step=iteration,
+            out_size=out_size
         )
         end_time = time.time()
         if check_time_limit and (end_time - start_time) > max_time_run:
