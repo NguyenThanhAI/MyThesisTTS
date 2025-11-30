@@ -11,6 +11,8 @@ import torch
 from einops import rearrange
 
 from model.base import BaseModule
+from model.base import ConvNorm
+import torch.nn.functional as F
 
 
 class Mish(BaseModule):
@@ -622,3 +624,502 @@ class ConsitencyTrigFlow(BaseModule):
             step=step,
             spk=spk,
         )
+    
+
+class LinearNorm(BaseModule):
+    """ LinearNorm Projection """
+
+    def __init__(self, in_features, out_features, bias=False):
+        super(LinearNorm, self).__init__()
+        self.linear = torch.nn.Linear(in_features, out_features, bias)
+
+        torch.nn.init.xavier_uniform_(self.linear.weight)
+        if bias:
+            torch.nn.init.constant_(self.linear.bias, 0.0)
+    
+    def forward(self, x):
+        x = self.linear(x)
+        return x
+
+
+class ResNetBlockDenoiser(BaseModule):
+    def __init__(self, decoder_dim, speaker_emb_dim, n_feats):
+        super(ResNetBlockDenoiser, self).__init__()
+        self.decoder_dim = decoder_dim
+        self.speaker_emb_dim = speaker_emb_dim
+        self.n_feats = n_feats
+
+        self.speaker_projection = LinearNorm(
+            in_features=speaker_emb_dim, 
+            out_features=decoder_dim,
+            bias=True
+        )
+
+        self.condition_projection = ConvNorm(
+            in_channels=n_feats, 
+            out_channels=decoder_dim, 
+            kernel_size=1, 
+            stride=1, 
+            padding=0
+        )
+
+        self.time_projection = LinearNorm(
+            in_features=decoder_dim, 
+            out_features=decoder_dim,
+            bias=True
+        )
+
+        self.conv_layer = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=decoder_dim * 2,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+
+        self.output_projection = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=decoder_dim * 2,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+
+    def forward(self, x, cond, time_emb, speaker_emb, mask):
+        """
+        x: (B, n_feats, T) - noisy mel-spectrogram
+        t: (B, decoder_dim) - diffusion step
+        cond: (B, n_feats, T) - conditional features
+        speaker_emb: (B, speaker_emb_dim) - speaker embedding
+        mask: (B, 1, T) - padding mask
+        Returns:
+        """
+        # Time embedding
+        # ttime_emb = self.time_pos_emb(t)  # (B, decoder_dim)
+        # time_emb = self.time_mlp(time_emb)  # (B, decoder_dim)
+        t_emb = self.time_projection(time_emb)  # (B, decoder_dim)
+
+        # Speaker embedding projection
+        speaker_emb = self.speaker_projection(speaker_emb)  # (B, decoder_dim)
+
+        # Condition projection
+        cond = self.condition_projection(cond, mask)  # (B, decoder_dim, T)
+
+        # Combine all embeddings
+        # x: (B, C, T)
+        # t_emb: (B, decoder_dim) -> (B, decoder_dim, 1)
+        # speaker_emb: (B, decoder_dim) -> (B, decoder_dim, 1)
+        residual = x + t_emb.unsqueeze(-1)
+        x = residual + speaker_emb.unsqueeze(-1) + cond
+
+        x = self.conv_layer(x, mask)  # (B, decoder_dim * 2, T)
+
+        gate, filter = torch.chunk(x, 2, dim=1)  # (B, decoder_dim, T) each
+        x = torch.sigmoid(gate) * torch.tanh(filter)  # (B, decoder_dim, T)
+
+        y = self.output_projection(x, mask)  # (B, decoder_dim * 2, T)
+        x, skip = torch.chunk(y, 2, dim=1)  # (B, decoder_dim, T) each
+
+        return (x + residual) / math.sqrt(2.0), skip
+    
+
+class ConsistencyDenoiser(BaseModule):
+    def __init__(
+            self, 
+            num_blocks, 
+            decoder_dim, 
+            speaker_emb_dim, 
+            n_feats,
+            pe_scale: int=10
+        ):
+        super(ConsistencyDenoiser, self).__init__()
+        self.num_blocks = num_blocks
+        self.decoder_dim = decoder_dim
+        self.speaker_emb_dim = speaker_emb_dim
+        self.n_feats = n_feats
+        self.pe_scale = pe_scale
+
+        self.time_pos_emb = SinusoidalPosEmb(dim=decoder_dim)
+        self.time_mlp = torch.nn.Sequential(
+            torch.nn.Linear(in_features=decoder_dim, out_features=decoder_dim * 4),
+            torch.nn.SiLU(),
+            torch.nn.Linear(in_features=decoder_dim * 4, out_features=decoder_dim),
+            torch.nn.SiLU(),
+        )
+
+        self.input_projection = ConvNorm(
+            in_channels=n_feats,
+            out_channels=decoder_dim,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            )
+
+        self.resnet_blocks = torch.nn.ModuleList(
+            [
+                ResNetBlockDenoiser(
+                    decoder_dim=decoder_dim,
+                    speaker_emb_dim=speaker_emb_dim,
+                    n_feats=n_feats,
+                )
+                for _ in range(num_blocks)
+            ]
+        )
+
+        self.skip_projection = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=decoder_dim,
+            kernel_size=1,
+            stride=1,
+            padding=0
+        )
+
+        self.output_projection = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=n_feats,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+
+    def forward(self, x, cond, t, spk, mask):
+        """
+        x: (B, n_feats, T) - noisy mel-spectrogram
+        cond: (B, n_feats, T) - conditional features
+        t: (B, ) - diffusion step
+        spk: (B, speaker_emb_dim) - speaker embedding
+        mask: (B, 1, T) - padding mask
+        Returns:
+        """
+        time_emb = self.time_pos_emb.forward(t, scale=self.pe_scale)  # (B, decoder_dim)
+        time_emb = self.time_mlp(time_emb) # (B, decoder_dim)
+        x = self.input_projection(x, mask)  # (B, decoder_dim, T)
+        x = F.relu(x)
+        skip_connections = []
+        for resnet_block in self.resnet_blocks:
+            x, skip = resnet_block(
+                x, cond, time_emb, spk, mask
+            )  # x: (B, decoder_dim, T), skip: (B, decoder_dim, T)
+            skip_connections.append(skip)
+
+        x = torch.sum(torch.stack(skip_connections, dim=0), dim=0) / math.sqrt(self.num_blocks)  # (B, decoder_dim, T)
+        x = self.skip_projection(x, mask)  # (B, decoder_dim, T)
+        x = F.relu(x)
+        x = self.output_projection(x, mask)  # (B, n_feats, T)
+
+        return x
+    
+
+class ConsistencyDiffusion(BaseModule):
+    def __init__(
+            self, 
+            n_feats, 
+            dim,
+            num_warmup_steps: int,
+            total_steps: int,
+            num_blocks: int=20,
+            spk_emb_dim=64,
+            pe_scale=1,
+            ema_rate: float=0.98,
+            sigma_max: float=80.0,
+            sigma_min: float=0.002,
+            rho: float=7.0,
+            sigma_data: float=0.5,
+            start_scales: int=2,
+            end_scales: int=200,
+            weight_schedule: str="karras"
+        ):
+        super(ConsistencyDiffusion, self).__init__()
+        self.n_feats = n_feats
+        self.dim = dim
+        self.num_warmup_steps = num_warmup_steps
+        self.num_blocks = num_blocks
+        self.spk_emb_dim = spk_emb_dim
+        self.pe_scale = pe_scale
+        self.ema_rate = ema_rate
+
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.sigma_data: float=sigma_data
+        self.start_scales = start_scales
+        self.end_scales = end_scales
+        self.num_scales = self.start_scales
+        self.weight_schedule = weight_schedule
+
+        self.estimator = ConsistencyDenoiser(
+            num_blocks=num_blocks,
+            decoder_dim=dim,
+            speaker_emb_dim=spk_emb_dim,
+            n_feats=n_feats,
+            pe_scale=pe_scale
+        )
+
+        self.target_estimator = ConsistencyDenoiser(
+            num_blocks=num_blocks,
+            decoder_dim=dim,
+            speaker_emb_dim=spk_emb_dim,
+            n_feats=n_feats,
+            pe_scale=pe_scale
+        )
+
+        self.target_estimator.requires_grad_(False)
+        self.copy_target_params()
+
+        self.ema_and_scales_fn = self.create_ema_and_scales_fn(
+            start_ema=self.ema_rate,
+            start_scales=self.start_scales,
+            end_scales=self.end_scales,
+            total_steps=total_steps
+        )
+    
+    def copy_target_params(self):
+        for param, target_param in zip(
+            self.estimator.parameters(), 
+            self.target_estimator.parameters()
+        ):
+            target_param.data.copy_(param.data)
+
+
+    def update_ema_target_params(self):
+        with torch.no_grad():
+            for param, target_param in zip(
+                self.estimator.parameters(),
+                self.target_estimator.parameters()
+            ):
+                target_param.mul_(self.ema_rate).add_(param, alpha=1 - self.ema_rate)
+
+    def create_ema_and_scales_fn(
+        self,
+        start_ema,
+        start_scales,  # 2
+        end_scales,
+        total_steps,
+    ):
+        def ema_and_scales_fn(step):
+            scales = np.ceil(
+                np.sqrt(
+                    (step / total_steps) * ((end_scales + 1) ** 2 - start_scales**2)
+                    + start_scales**2
+                )
+                - 1
+            ).astype(np.int32)
+            scales = np.maximum(scales, 1)
+            c = -np.log(start_ema) * start_scales
+            target_ema = np.exp(-c / scales)
+            scales = scales + 1
+            return float(target_ema), int(scales)
+        
+        return ema_and_scales_fn
+
+    def compute_t_from_indices(self, indices):
+        t = self.sigma_max ** (1 / self.rho) + indices / (self.num_scales - 1) * (
+                self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
+        )
+        t = t ** self.rho
+        return t
+
+    def forward_diffusion(self, x0, mask, indices, z):
+        # z = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, 
+        #                 requires_grad=False)
+        t = self.compute_t_from_indices(indices)
+        time = t.unsqueeze(-1).unsqueeze(-1) # [batch_size, 1, 1]
+        x_t = x0 + time * z
+
+        return x_t * mask, t
+    
+    @staticmethod
+    def get_sigmas_karras(n, sigma_min, sigma_max, rho=7.0, device="cpu"):
+        """Constructs the noise schedule of Karras et al. (2022)."""
+        ramp = torch.linspace(0, 1, n)
+        min_inv_rho = sigma_min ** (1 / rho)
+        max_inv_rho = sigma_max ** (1 / rho)
+        sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+        return sigmas.to(device)
+    
+    @torch.no_grad()
+    def reverse_diffusion(self, z, mask, mu, n_timesteps, spk=None):
+        x_t = z * mask
+        # sigmas = self.get_sigmas_karras(
+        #     n=n_timesteps,
+        #     sigma_min=self.sigma_min,
+        #     sigma_max=self.sigma_max,
+        #     rho=self.rho,
+        #     device=z.device
+        # )
+        t_max_rho = self.sigma_max ** (1 / self.rho)
+        t_min_rho = self.sigma_min ** (1 / self.rho)
+        for i in range(n_timesteps - 1):
+            t = (t_max_rho + i / (n_timesteps - 1) * (t_min_rho - t_max_rho)) ** self.rho
+            t = torch.tensor([t], device=z.device)
+            pred_x0 = self.denoiser_wrapper(
+                x_t=x_t,
+                t=t,
+                mask=mask,
+                mu=mu,
+                spk=spk
+            )
+            next_t = (t_max_rho + (i + 1) / (n_timesteps - 1) * (t_min_rho - t_max_rho)) ** self.rho
+            next_t = torch.tensor(next_t, device=z.device)
+            x_t = pred_x0 + torch.rand_like(z) * torch.sqrt(next_t**2 - self.sigma_min**2)
+
+        return pred_x0
+
+    def forward(self, z, mask, mu, n_timesteps, spk=None):
+        return self.reverse_diffusion(z=z, mask=mask, mu=mu, n_timesteps=n_timesteps, spk=spk)
+    
+    def get_snr(self, sigmas):
+        return sigmas ** -2
+    
+    def get_weightings(self, snrs):
+        if self.weight_schedule == "snr":
+            weightings = snrs
+        elif self.weight_schedule == "snr+1":
+            weightings = snrs + 1
+        elif self.weight_schedule == "karras":
+            weightings = snrs + 1.0 / self.sigma_data ** 2
+        elif self.weight_schedule == "truncated-snr":
+            weightings = torch.clamp(snrs, min=1.0)
+        elif self.weight_schedule == "uniform":
+            weightings = torch.ones_like(snrs)
+        else:
+            raise NotImplementedError()
+        return weightings
+    
+    def get_scalings(self, sigma):
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        return c_skip, c_out, c_in
+    
+    def get_scalings_for_boundary_condition(self, sigma):
+        """
+
+        :param sigma:
+        :return:
+        """
+        c_skip = self.sigma_data ** 2 / (
+                (sigma - self.sigma_min) ** 2 + self.sigma_data ** 2
+        )
+        c_out = (
+                (sigma - self.sigma_min)
+                * self.sigma_data
+                / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        )
+        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        return c_skip, c_out, c_in
+
+    
+    def denoiser_wrapper(self, x_t, t, mask, mu, spk):
+        
+        c_skip, c_out, c_in = self.get_scalings_for_boundary_condition(t)
+        pred = self.estimator.forward(
+            x=c_in.unsqueeze(-1).unsqueeze(-1) * x_t,
+            cond=mu,
+            t=t,
+            spk=spk,
+            mask=mask,
+        )
+        return c_skip.unsqueeze(-1).unsqueeze(-1) * x_t + c_out.unsqueeze(-1).unsqueeze(-1) * pred
+    
+    @staticmethod
+    def masked_smooth_l2_with_weight(x, y, mask, weights, c=0.1):
+        # x, y:    [B, 80, T]
+        # mask:    [B, 1, T]  (0/1 float)
+        # weights: [B]
+
+        # Mở rộng mask từ [B, 1, T] -> [B, 80, T]
+        mask_expanded = mask.expand_as(x)
+
+        # Áp mask vào diff
+        diff = (x - y) * mask_expanded                 # [B, 80, T]
+
+        # Tính L2^2 theo từng sample
+        sq = (diff ** 2).sum(dim=(1, 2))               # [B]
+
+        # Đếm số frame hợp lệ theo từng sample
+        num_valid = mask_expanded.sum(dim=(1, 2)) + 1e-9        # [B], tránh chia 0
+
+        # Chuẩn hóa theo số frame
+        sq = sq / num_valid                            # [B]
+
+        # Smooth L2 loss
+        loss = torch.sqrt(sq + c*c) - c                # [B]
+
+        # Nhân weights per sample
+        loss = loss * weights
+        return loss                       # [B]
+    
+    def loss_t(self, x0, mask, mu, indices, step, spk=None):
+        z = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, 
+                         requires_grad=False)
+        x_t, t = self.forward_diffusion(x0=x0, mask=mask, indices=indices, z=z)
+        x_t2, t2 = self.forward_diffusion(x0=x0, mask=mask, indices=indices + 1, z=z)
+
+        snrs = self.get_snr(t)
+        # if weights is None:
+        weights = self.get_weightings(snrs)
+
+        denoised_pred = self.denoiser_wrapper(
+            x_t=x_t,
+            t=t,
+            mask=mask,
+            mu=mu,
+            spk=spk
+        )
+
+        denoised_target = self.denoiser_wrapper(
+            x_t=x_t2,
+            t=t2,
+            mask=mask,
+            mu=mu,
+            spk=spk
+        )
+
+        denoised_target = denoised_target.detach()
+
+        diff_loss = self.masked_smooth_l2_with_weight(
+            x=denoised_pred,
+            y=denoised_target,
+            mask=mask,
+            weights=weights
+        )
+        diff_loss = diff_loss.mean()
+
+        recon_loss = self.masked_smooth_l2_with_weight(
+            x=denoised_pred,
+            y=x0,
+            mask=mask,
+            weights=weights
+        )
+        recon_loss = recon_loss.mean()
+
+        return diff_loss, recon_loss, x_t
+    
+
+    def compute_loss(self, x0, mask, mu, step, spk=None):
+        target_ema, num_scales = self.ema_and_scales_fn(step)
+        self.ema_rate = target_ema
+        if self.num_scales != num_scales:
+            print(f"Updating num_scales: {self.num_scales} -> {num_scales}")
+        self.num_scales = num_scales
+
+        indices = torch.randint(
+            low=0,
+            high=self.num_scales - 1,
+            size=(x0.shape[0],),
+            device=x0.device,
+            dtype=torch.int32,
+            requires_grad=False
+        )
+
+        diff_loss, recon_loss, x_t = self.loss_t(
+            x0=x0,
+            mask=mask,
+            mu=mu,
+            indices=indices,
+            step=step,
+            spk=spk
+        )
+
+        return diff_loss, recon_loss, x_t

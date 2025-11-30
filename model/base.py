@@ -120,6 +120,7 @@ class ConvNorm(BaseModule):
     def forward(self, x: torch.Tensor, x_mask: torch.Tensor):
         x = x.contiguous()
         x = self.conv(x * x_mask)
+        return x * x_mask
 
 
 class AffineLinear(BaseModule):
