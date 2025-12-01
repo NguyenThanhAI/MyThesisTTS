@@ -1014,10 +1014,11 @@ class ConsistencyDiffusion(BaseModule):
     def denoiser_wrapper(self, x_t, t, mask, mu, spk):
         
         c_skip, c_out, c_in = self.get_scalings_for_boundary_condition(t)
+        rescaled_t = 1000 * 0.25 * torch.log(t + 1e-12)
         pred = self.estimator.forward(
             x=c_in.unsqueeze(-1).unsqueeze(-1) * x_t,
             cond=mu,
-            t=t,
+            t=rescaled_t,
             spk=spk,
             mask=mask,
         )
