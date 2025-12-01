@@ -965,6 +965,7 @@ class ConsistencyDiffusion(BaseModule):
 
         return pred_x0
 
+    @torch.no_grad()
     def forward(self, z, mask, mu, n_timesteps, spk=None):
         return self.reverse_diffusion(z=z, mask=mask, mu=mu, n_timesteps=n_timesteps, spk=spk)
     
@@ -1023,7 +1024,7 @@ class ConsistencyDiffusion(BaseModule):
         return c_skip.unsqueeze(-1).unsqueeze(-1) * x_t + c_out.unsqueeze(-1).unsqueeze(-1) * pred
     
     @staticmethod
-    def masked_smooth_l2_with_weight(x, y, mask, weights, c=0.1):
+    def masked_smooth_l2_with_weight(x, y, mask, weights, c=0.07):
         # x, y:    [B, 80, T]
         # mask:    [B, 1, T]  (0/1 float)
         # weights: [B]

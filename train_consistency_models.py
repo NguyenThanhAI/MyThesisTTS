@@ -112,7 +112,7 @@ def synthesize_melspectrogram(
                     x=x, 
                     x_lengths=x_lengths, 
                     spk=spker_embed, 
-                    n_timesteps=50
+                    n_timesteps=5
                 )
 
                 fig_mel_gt = plot_mel_comet(y)
@@ -184,7 +184,7 @@ def get_args():
     parser.add_argument("--dec_dim", type=int, default=256)
     # parser.add_argument("--beta_min", type=float, default=params.beta_min)
     # parser.add_argument("--beta_max", type=float, default=params.beta_max)
-    parser.add_argument("--pe_scale", type=int, default=10)
+    parser.add_argument("--pe_scale", type=int, default=1)
     parser.add_argument("--save_every", type=int, default=50000)
     parser.add_argument("--max_time_run", type=int, default=None)
     parser.add_argument("--synthesize_every", type=int, default=5)
@@ -506,6 +506,7 @@ if __name__ == "__main__":
                 epoch=epoch,
                 iteration=iteration,
                 batch_index=batch_idx,
+                log_dir=log_dir,
                 dataset_name=dataset_name
             )
             torch.cuda.empty_cache()
@@ -520,6 +521,7 @@ if __name__ == "__main__":
                 epoch=epoch,
                 iteration=iteration,
                 batch_index=batch_idx,
+                log_dir=log_dir,
                 dataset_name=dataset_name
             )
             torch.cuda.empty_cache()
