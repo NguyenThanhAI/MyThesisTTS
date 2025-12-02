@@ -782,10 +782,10 @@ class ConsistencyDenoiser(BaseModule):
             padding=0,
         )
 
-    def forward(self, x, cond, t, spk, mask):
+    def forward(self, x, mu, t, spk, mask):
         """
         x: (B, n_feats, T) - noisy mel-spectrogram
-        cond: (B, n_feats, T) - conditional features
+        mu: (B, n_feats, T) - conditional features
         t: (B, ) - diffusion step
         spk: (B, speaker_emb_dim) - speaker embedding
         mask: (B, 1, T) - padding mask
@@ -798,7 +798,7 @@ class ConsistencyDenoiser(BaseModule):
         skip_connections = []
         for resnet_block in self.resnet_blocks:
             x, skip = resnet_block(
-                x, cond, time_emb, spk, mask
+                x, mu, time_emb, spk, mask
             )  # x: (B, decoder_dim, T), skip: (B, decoder_dim, T)
             skip_connections.append(skip)
 
@@ -847,18 +847,34 @@ class ConsistencyDiffusion(BaseModule):
         self.num_scales = self.start_scales
         self.weight_schedule = weight_schedule
 
-        self.estimator = ConsistencyDenoiser(
-            num_blocks=num_blocks,
-            decoder_dim=dim,
-            speaker_emb_dim=spk_emb_dim,
+        # self.estimator = ConsistencyDenoiser(
+        #     num_blocks=num_blocks,
+        #     decoder_dim=dim,
+        #     speaker_emb_dim=spk_emb_dim,
+        #     n_feats=n_feats,
+        #     pe_scale=pe_scale
+        # )
+
+        # self.target_estimator = ConsistencyDenoiser(
+        #     num_blocks=num_blocks,
+        #     decoder_dim=dim,
+        #     speaker_emb_dim=spk_emb_dim,
+        #     n_feats=n_feats,
+        #     pe_scale=pe_scale
+        # )
+
+        self.estimator = GradLogPEstimator2d(
+            dim=dim,
+            n_spks=2,
+            spk_emb_dim=spk_emb_dim,
             n_feats=n_feats,
             pe_scale=pe_scale
         )
 
-        self.target_estimator = ConsistencyDenoiser(
-            num_blocks=num_blocks,
-            decoder_dim=dim,
-            speaker_emb_dim=spk_emb_dim,
+        self.target_estimator = GradLogPEstimator2d(
+            dim=dim,
+            n_spks=2,
+            spk_emb_dim=spk_emb_dim,
             n_feats=n_feats,
             pe_scale=pe_scale
         )
@@ -1017,7 +1033,7 @@ class ConsistencyDiffusion(BaseModule):
         # rescaled_t = 1000 * 0.25 * torch.log(t + 1e-12)
         pred = self.estimator.forward(
             x=c_in.unsqueeze(-1).unsqueeze(-1) * x_t,
-            cond=mu,
+            mu=mu,
             t=t,
             spk=spk,
             mask=mask,
@@ -1070,13 +1086,14 @@ class ConsistencyDiffusion(BaseModule):
             spk=spk
         )
 
-        denoised_target = self.denoiser_wrapper(
-            x_t=x_t2,
-            t=t2,
-            mask=mask,
-            mu=mu,
-            spk=spk
-        )
+        with torch.no_grad():
+            denoised_target = self.denoiser_wrapper(
+                x_t=x_t2,
+                t=t2,
+                mask=mask,
+                mu=mu,
+                spk=spk
+            )
 
         denoised_target = denoised_target.detach()
 
