@@ -18,7 +18,7 @@ import comet_ml
 from comet_ml import Experiment, ExistingExperiment
 
 import params
-from model import ConsistencyModelWithSpeakerEmbeddingAdditive
+from model import ConsistencyModelWithSpeakerEmbeddingAdditive, ConsistencyModelWithSpeakerEmbeddingAndSALN
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
 from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
@@ -30,7 +30,7 @@ from typing import Union
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, log_dir, dataset_name="LJSpeech"):
+def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, log_dir, use_additive, dataset_name="LJSpeech"):
     ckpt = {"model_state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "lr_scheduler": scheduler.state_dict(),
@@ -38,7 +38,10 @@ def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, log_d
             "iteration": iteration,
             "batch_index": batch_index}
     print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
-    add = "additive"
+    if use_additive:
+        add = "additive"
+    else:
+        add = "use_saln"
     torch.save(ckpt, f=os.path.join(log_dir, f"consistency_multi_speaker_{dataset_name}_{add}_steps_{iteration}.pt"))
 
 
@@ -349,6 +352,34 @@ if __name__ == "__main__":
             end_scales=end_scales,
             weight_schedule=weight_schedule
         ).to(device)
+    else:
+        print("Using Consistency Model with Speaker Embedding and SALN model")
+        model = ConsistencyModelWithSpeakerEmbeddingAndSALN(
+            n_vocab=nsymbols,
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_enc_layers=n_enc_layers,
+            enc_kernel_size=enc_kernel,
+            enc_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=512,
+            dec_dim=dec_dim,
+            num_warmup_steps=num_warmup_steps,
+            total_steps=total_training_steps,
+            num_dec_blocks=num_dec_blocks,
+            pe_scale=pe_scale,
+            start_ema_rate=start_ema_rate,
+            sigma_max=sigma_max,
+            sigma_min=sigma_min,
+            rho=rho,
+            sigma_data=sigma_data,
+            start_scales=start_scales,
+            end_scales=end_scales,
+            weight_schedule=weight_schedule
+        ).to(device)
 
     print("Number of encoder + duration predictor parameters: %.2fm" % (model.encoder.nparams/1e6))
     print("Number of decoder parameters: %.2fm" % (model.decoder.nparams/1e6))
@@ -478,6 +509,7 @@ if __name__ == "__main__":
                     iteration=iteration,
                     batch_index=batch_idx,
                     log_dir=log_dir,
+                    use_additive=use_additive,
                     dataset_name=dataset_name
                 )
 
@@ -507,6 +539,7 @@ if __name__ == "__main__":
                 iteration=iteration,
                 batch_index=batch_idx,
                 log_dir=log_dir,
+                use_additive=use_additive,
                 dataset_name=dataset_name
             )
             torch.cuda.empty_cache()
@@ -522,6 +555,7 @@ if __name__ == "__main__":
                 iteration=iteration,
                 batch_index=batch_idx,
                 log_dir=log_dir,
+                use_additive=use_additive,
                 dataset_name=dataset_name
             )
             torch.cuda.empty_cache()

@@ -854,6 +854,93 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
         return dur_loss, prior_loss, consistency_loss, recon_loss
     
 
+class ConsistencyModelWithSpeakerEmbeddingAndSALN(ConsistencyModelWithSpeakerEmbeddingAdditive):
+    def __init__(
+            self,
+            n_vocab: int,
+            n_feats: int,
+            n_enc_channels: int,
+            filter_channels: int,
+            filter_channels_dp,
+            n_heads: int,
+            n_enc_layers: int,
+            enc_kernel_size: int,
+            enc_dropout: int,
+            window_size: int,
+            spk_emb_dim: int,
+            dec_dim: int,
+            num_warmup_steps: int,
+            total_steps: int,
+            num_dec_blocks: int,
+            pe_scale: int,
+            start_ema_rate: float,
+            sigma_max: float,
+            sigma_min: float,
+            rho: float,
+            sigma_data: float=0.5,
+            start_scales: int=3,
+            end_scales: int=200,
+            weight_schedule: str="karras"
+        ):
+        BaseModule.__init__(self=self)
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+        self.dec_dim = dec_dim
+        self.num_warmup_steps = num_warmup_steps
+        self.total_steps = total_steps
+        self.num_dec_blocks = num_dec_blocks
+        self.pe_scale = pe_scale
+        self.start_ema_rate = start_ema_rate
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.sigma_data = sigma_data
+        self.start_scales = start_scales
+        self.end_scales = end_scales
+        self.weight_schedule = weight_schedule
+
+        self.encoder = StyleTextEncoder(
+            n_vocab=n_vocab, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel_size,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+
+        self.decoder = ConsistencyDiffusion(
+            n_feats=n_feats,
+            dim=dec_dim,
+            num_warmup_steps=num_warmup_steps,
+            total_steps=total_steps,
+            num_blocks=num_dec_blocks,
+            spk_emb_dim=spk_emb_dim,
+            pe_scale=pe_scale,
+            ema_rate=start_ema_rate,
+            sigma_max=sigma_max,
+            sigma_min=sigma_min,
+            rho=rho,
+            sigma_data=sigma_data,
+            start_scales=start_scales,
+            end_scales=end_scales,
+            weight_schedule=weight_schedule
+        )
+    
+
 class VarianceAdaptorGradTTS(BaseModule):
     def __init__(self, n_vocab: int, n_enc_channels: int, filter_channels: int, 
                  n_heads: int, n_enc_layers: int, enc_kernel: int, enc_dropout: int, window_size: int, 
