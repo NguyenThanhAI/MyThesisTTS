@@ -152,8 +152,10 @@ class LMDBPreprocessor:
         # val = list()
         n_frames = 0
         max_seq_len = -float('inf')
-        mel_min = np.ones(80) * float('inf')
-        mel_max = np.ones(80) * -float('inf')
+        # mel_min = np.ones(80) * float('inf')
+        # mel_max = np.ones(80) * -float('inf')
+        mel_min = float('inf')
+        mel_max = -float('inf')
         f0s = []
         energy_scaler = StandardScaler()
 
@@ -200,6 +202,9 @@ class LMDBPreprocessor:
                         continue
                 else:
                     info, n, m_min, m_max, spker_embed = ret
+
+                mel_min = np.minimum(mel_min, m_min)
+                mel_max = np.maximum(mel_max, m_max)
 
                 if split == "train":
                         train_list.append(info)
@@ -252,6 +257,7 @@ class LMDBPreprocessor:
                 n_frames * self.hop_length / self.sampling_rate / 3600
             )
         )
+        print(f"Mel min: {mel_min},\nMel max: {mel_max}")
 
         # Save files
         with open(os.path.join(self.save_dir, self.dataset_name, "speakers.json"), "w") as f:
@@ -269,6 +275,15 @@ class LMDBPreprocessor:
         with open(os.path.join(self.save_dir, self.dataset_name, "filtered_out.txt"), "w", encoding="utf-8") as f:
             for m in sorted(filtered_out):
                 f.write(str(m) + "\n")
+
+        with open(os.path.join(self.save_dir, self.dataset_name, "stats.json"), "w") as f:
+            stats = {
+                "mel_spectrogram": [
+                    float(mel_min),
+                    float(mel_max),
+                ],
+            }
+            f.write(json.dumps(stats))
 
     def process_utterance(self, speaker, basename, save_speaker_emb, split):
         wav_path = os.path.join(self.in_dir, speaker, "{}.wav".format(basename))
@@ -331,8 +346,8 @@ class LMDBPreprocessor:
         return (
             "|".join([basename, speaker, raw_text]),
             mel.shape[1],
-            np.min(mel, axis=1),
-            np.max(mel, axis=1),
+            np.min(mel),
+            np.max(mel),
             spker_embed,
         )
     
