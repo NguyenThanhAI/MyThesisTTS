@@ -8,6 +8,7 @@ import torch
 
 import params
 from model import GradTTSWithSpeakerEmbedding
+from model import GradTTSWithSpeakerEmbeddingAdditive, GradTTSWithSpeakerEmbeddingAndSALN
 from text import text_to_sequence, cmudict
 from text.symbols import symbols
 from utils import intersperse
@@ -61,7 +62,12 @@ if __name__ == "__main__":
     parser.add_argument("--dec_dim", type=int, default=params.dec_dim)
     parser.add_argument("--beta_min", type=float, default=params.beta_min)
     parser.add_argument("--beta_max", type=float, default=params.beta_max)
-    parser.add_argument("--pe_scale", type=int, default=params.pe_scale)
+    parser.add_argument("--pe_scale", type=int, default=params.pe_scale) # Mặc định là 1000
+
+    parser.add_argument("--use_saln", type=str2bool, default=True)
+    parser.add_argument("--use_additive", type=str2bool, default=True)
+
+    parser.add_argument("--multi_speaker", type=str2bool, default=True)
     args = parser.parse_args()
 
     speaker_style_wav = args.speaker_style_wav
@@ -92,33 +98,83 @@ if __name__ == "__main__":
     beta_min = args.beta_min
     beta_max = args.beta_max
     pe_scale = args.pe_scale
+
+    use_saln = args.use_saln
+    use_additive = args.use_additive
+
+    multi_speaker = args.multi_speaker
     
     style_vector = np.load(args.speaker_style_wav)
     style_vector = torch.from_numpy(style_vector).to(device=device)
-    print("Initializing Grad-TTS...")
-    generator = GradTTSWithSpeakerEmbedding(
-        n_vocab=nsymbols,
-        n_spks=2,
-        spk_emb_dim=512,
-        n_enc_channels=n_enc_channels,
-        filter_channels=filter_channels,
-        filter_channels_dp=filter_channels_dp,
-        n_heads=n_heads,
-        n_enc_layers=n_enc_layers,
-        enc_kernel=enc_kernel,
-        enc_dropout=enc_dropout,
-        window_size=window_size,
-        n_feats=n_feats,
-        dec_dim=dec_dim,
-        beta_min=beta_min,
-        beta_max=beta_max,
-        pe_scale=pe_scale
-    )
+    print("Initializing model...")
+
+    if use_additive:
+        generator = GradTTSWithSpeakerEmbeddingAdditive(
+            n_vocab=nsymbols,
+            n_spks=2,
+            spk_emb_dim=512,
+            n_enc_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_enc_layers=n_enc_layers,
+            enc_kernel=enc_kernel,
+            enc_dropout=enc_dropout, 
+            window_size=window_size, 
+            n_feats=n_feats, 
+            dec_dim=dec_dim, 
+            beta_min=beta_min, 
+            beta_max=beta_max, 
+            pe_scale=pe_scale
+        ).to(device=device)
+    else:
+        if not use_saln:
+            print("Using GradTTS with Speaker Embedding model")
+            generator = GradTTSWithSpeakerEmbedding(
+                n_vocab=nsymbols,
+                n_spks=2,
+                spk_emb_dim=512,
+                n_enc_channels=n_enc_channels,
+                filter_channels=filter_channels,
+                filter_channels_dp=filter_channels_dp,
+                n_heads=n_heads,
+                n_enc_layers=n_enc_layers,
+                enc_kernel=enc_kernel,
+                enc_dropout=enc_dropout, 
+                window_size=window_size, 
+                n_feats=n_feats, 
+                dec_dim=dec_dim, 
+                beta_min=beta_min, 
+                beta_max=beta_max, 
+                pe_scale=pe_scale
+            ).to(device=device)
+        else:
+            print("Using GradTTS with Speaker Embedding and SALN model")
+            generator = GradTTSWithSpeakerEmbeddingAndSALN(
+                n_vocab=nsymbols,
+                n_spks=2,
+                spk_emb_dim=512,
+                n_enc_channels=n_enc_channels,
+                filter_channels=filter_channels,
+                filter_channels_dp=filter_channels_dp,
+                n_heads=n_heads,
+                n_enc_layers=n_enc_layers,
+                enc_kernel=enc_kernel,
+                enc_dropout=enc_dropout, 
+                window_size=window_size, 
+                n_feats=n_feats, 
+                dec_dim=dec_dim, 
+                beta_min=beta_min, 
+                beta_max=beta_max, 
+                pe_scale=pe_scale
+            ).to(device=device)
     generator.load_state_dict(torch.load(args.checkpoint, map_location=lambda loc, storage: loc)["model_state_dict"])
     _ = generator.to(device=device).eval()
     print(f"Number of parameters: {generator.nparams}")
     
     print("Initializing HiFi-GAN...")
+    if multi_speaker:
+        HIFIGAN_CHECKPT = "./checkpts/generator_universal.pth.tar"
     with open(HIFIGAN_CONFIG) as f:
         h = AttrDict(json.load(f))
     vocoder = HiFiGAN(h)
@@ -139,7 +195,7 @@ if __name__ == "__main__":
             
             t = dt.datetime.now()
             y_enc, y_dec, attn = generator.forward(x, x_lengths, n_timesteps=args.timesteps, temperature=1.5,
-                                                   stoc=False, spk=style_vector, length_scale=0.91)
+                                                   stoc=False, spk=style_vector, length_scale=1.1)
             t = (dt.datetime.now() - t).total_seconds()
             print(f"Grad-TTS RTF: {t * 22050 / (y_dec.shape[-1] * 256)}")
 
