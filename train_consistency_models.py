@@ -23,6 +23,7 @@ from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEm
 from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
 from utils import get_optimal_num_workers_and_prefetch_factor, str2bool, get_scheduler, find_resume_checkpoint
+from utils import get_min_max_mel
 from text.symbols import symbols
 
 from typing import Union
@@ -270,7 +271,13 @@ if __name__ == "__main__":
     end_scales = args.end_scales
     weight_schedule = args.weight_schedule
 
+    mel_min, mel_max = get_min_max_mel(dataset_name=dataset_name)
+
+    print("==================================================================")
     print(f"Arguments: {args}")
+    print("==================================================================")
+    print(f"mel min: {mel_min}, mel max: {mel_max} of dataset {dataset_name}")
+    print("==================================================================")
 
     if logger_type == "comet":
         os.environ["COMET_API_KEY"] = comet_api_key
@@ -347,6 +354,8 @@ if __name__ == "__main__":
             sigma_max=sigma_max,
             sigma_min=sigma_min,
             rho=rho,
+            mel_min=mel_min,
+            mel_max=mel_max,
             sigma_data=sigma_data,
             start_scales=start_scales,
             end_scales=end_scales,
@@ -375,6 +384,8 @@ if __name__ == "__main__":
             sigma_max=sigma_max,
             sigma_min=sigma_min,
             rho=rho,
+            mel_min=mel_min,
+            mel_max=mel_max,
             sigma_data=sigma_data,
             start_scales=start_scales,
             end_scales=end_scales,
@@ -451,7 +462,7 @@ if __name__ == "__main__":
                 out_size=out_size
             )
 
-            loss = sum([dur_loss, prior_loss, consistency_loss, recon_loss])
+            loss = sum([dur_loss, 2 * prior_loss, 10 * consistency_loss, 5 * recon_loss])
             loss.backward()
 
             enc_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.encoder.parameters(),

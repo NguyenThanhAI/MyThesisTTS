@@ -351,3 +351,14 @@ def find_resume_checkpoint(resume_checkpoint_dir):
         print(f"found resume checkpoint {max_step_checkpoint}")
         return max_step_checkpoint
     return None
+
+
+def get_min_max_mel(dataset_name: str) -> Tuple[float, float]:
+    if dataset_name == "LJSpeech":
+        return -11.512925148010254, 2.1342339515686035
+    elif dataset_name == "VCTK":
+        return -11.512925148010254, 2.2109005451202393
+    elif dataset_name == "LibriTTS":
+        return -11.512925148010254, 2.340341567993164
+    else:
+        raise ValueError(f"Dataset {dataset_name} not supported for min max mel retrieval.")

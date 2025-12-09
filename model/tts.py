@@ -648,6 +648,8 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
             sigma_max: float,
             sigma_min: float,
             rho: float,
+            mel_min: float,
+            mel_max: float,
             sigma_data: float=0.5,
             start_scales: int=3,
             end_scales: int=200,
@@ -674,6 +676,8 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
         self.rho = rho
+        self.mel_min = mel_min
+        self.mel_max = mel_max
         self.sigma_data = sigma_data
         self.start_scales = start_scales
         self.end_scales = end_scales
@@ -710,6 +714,14 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
             end_scales=end_scales,
             weight_schedule=weight_schedule
         )
+
+    def normlize_mel(self, mel: torch.Tensor) -> torch.Tensor:
+        mel = (mel - self.mel_min) / (self.mel_max - self.mel_min) * 2.0 - 1.0
+        return mel
+    
+    def denormlize_mel(self, mel: torch.Tensor) -> torch.Tensor:
+        mel = (mel + 1.0) * 0.5 * (self.mel_max - self.mel_min) + self.mel_min
+        return mel
 
     def update_ema_target_params(self):
         self.decoder.update_ema_target_params()
@@ -752,7 +764,9 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
         # Align encoded text and get mu_y
         mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
-        encoder_outputs = mu_y[:, :, :y_max_length]
+        dennoralized_mu_y = self.denormlize_mel(mu_y)
+        dennoralized_mu_y = dennoralized_mu_y * y_mask
+        encoder_outputs = dennoralized_mu_y[:, :, :y_max_length]
 
         # Sample latent representation from terminal distribution N(mu_y, I)
         z = torch.rand_like(
@@ -767,6 +781,8 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
             n_timesteps=n_timesteps,
             spk=spk
         )
+        decoder_outputs = self.denormlize_mel(decoder_outputs)
+        decoder_outputs = decoder_outputs * y_mask
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
         return encoder_outputs, decoder_outputs, attn[:, :, :y_max_length]
@@ -792,6 +808,10 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
 
         y_mask = sequence_mask(length=y_lengths, max_length=y_max_length).unsqueeze(1).to(x_mask)
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
+
+        y = self.normlize_mel(y)
+        y = y * y_mask
+        # print(f"y min: {y.min().item()}, y max: {y.max().item()}")
 
         # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
         with torch.no_grad(): 
@@ -877,6 +897,8 @@ class ConsistencyModelWithSpeakerEmbeddingAndSALN(ConsistencyModelWithSpeakerEmb
             sigma_max: float,
             sigma_min: float,
             rho: float,
+            mel_min: float,
+            mel_max: float,
             sigma_data: float=0.5,
             start_scales: int=3,
             end_scales: int=200,
@@ -903,6 +925,8 @@ class ConsistencyModelWithSpeakerEmbeddingAndSALN(ConsistencyModelWithSpeakerEmb
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
         self.rho = rho
+        self.mel_min = mel_min
+        self.mel_max = mel_max
         self.sigma_data = sigma_data
         self.start_scales = start_scales
         self.end_scales = end_scales
