@@ -462,7 +462,7 @@ if __name__ == "__main__":
                 out_size=out_size
             )
 
-            loss = sum([dur_loss, 2 * prior_loss, 10 * consistency_loss, 5 * recon_loss])
+            loss = sum([dur_loss, prior_loss, 10 * consistency_loss, 2 * recon_loss])
             loss.backward()
 
             enc_grad_norm = torch.nn.utils.clip_grad_norm_(parameters=model.encoder.parameters(),
