@@ -31,6 +31,17 @@ class Upsample(BaseModule):
 
     def forward(self, x):
         return self.conv(x)
+    
+class UpsampleMu(BaseModule):
+    def __init__(self):
+        super(UpsampleMu, self).__init__()
+        self.conv = torch.nn.ConvTranspose2d(in_channels=1, 
+                                             out_channels=1, 
+                                             kernel_size=4, 
+                                             stride=2, 
+                                             padding=1)
+    def forward(self, x):
+        return self.conv(x)
 
 
 class Downsample(BaseModule):
@@ -42,6 +53,17 @@ class Downsample(BaseModule):
                                     stride=2, 
                                     padding=1)
 
+    def forward(self, x):
+        return self.conv(x)
+
+class DownsampleMu(BaseModule):
+    def __init__(self):
+        super(DownsampleMu, self).__init__()
+        self.conv = torch.nn.Conv2d(in_channels=1, 
+                                    out_channels=1, 
+                                    kernel_size=3, 
+                                    stride=2, 
+                                    padding=1)
     def forward(self, x):
         return self.conv(x)
 
@@ -97,7 +119,109 @@ class ResnetBlock(BaseModule):
         h = self.block2(h, mask)
         output = h + self.res_conv(x * mask)
         return output
+    
+class TimeInject(BaseModule):
+    '''
+    naive introduce timestep information to feature maps with mlp and add shortcut
+    '''
+    def __init__(self, embedding_dim: int, hidden_dim: int, dim_out: int):
+        super(TimeInject, self).__init__()
+        self.mlp=torch.nn.Sequential(
+            torch.nn.Linear(embedding_dim, hidden_dim),
+            torch.nn.SiLU(),
+            torch.nn.Linear(hidden_dim, dim_out)
+        )
+        self.act=torch.nn.SiLU()
+    def forward(self, x, t, mask):
+        emb = t  # t is already embedded
+        c = self.mlp(emb) + 1
+        
+        # PixelNorm as in sCM
+        c = c / torch.sqrt(torch.mean(c ** 2, dim=1, keepdim=True) + 1e-8)
+        
+        # Inject time conditioning
+        x = x * c.unsqueeze(2).unsqueeze(3).to(x.dtype)
+        x = self.act(x)
+        x = x * mask
+        return x
+    
 
+class ConditionInject(BaseModule):
+    def __init__(self, dim_out: int):
+        super(ConditionInject, self).__init__()
+        self.dim_out = dim_out
+
+        self.cond_proj = torch.nn.Conv2d(
+            in_channels=1,
+            out_channels=dim_out,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
+        
+
+    def forward(self, x, cond, mask):
+        """
+        Docstring for forward
+        
+        :param self: Description
+        :param x: Description
+        :param cond: shape: [B, 1, 80, T]
+        """
+        cond_feat = self.cond_proj(cond)
+
+        x = x + cond_feat
+        x = x * mask
+        return x
+    
+
+class SpeakerInject(BaseModule):
+    def __init__(self, spk_emb_dim: int, hidden_dim: int, dim_out: int):
+        super(SpeakerInject, self).__init__()
+        self.dim_out = dim_out
+
+        self.mlp_spk = torch.nn.Sequential(
+            torch.nn.Linear(spk_emb_dim, hidden_dim),
+            torch.nn.SiLU(),
+            torch.nn.Linear(hidden_dim, dim_out)
+        )
+
+    def forward(self, x, spk, mask):
+        spk_emb = self.mlp_spk(spk)
+
+        x = x + spk_emb.unsqueeze(-1).unsqueeze(-1).to(x.dtype)
+        x = x * mask
+        return x
+    
+
+class ResNetBlockWithSpeakerAndConditionInject(BaseModule):
+    def __init__(self, dim, dim_out, time_emb_dim, spk_emb_dim, groups=8):
+        super(ResNetBlockWithSpeakerAndConditionInject, self).__init__()
+        self.time_inject = TimeInject(embedding_dim=time_emb_dim, hidden_dim=dim_out, dim_out=dim_out)
+        self.spk_inject = SpeakerInject(spk_emb_dim=spk_emb_dim, hidden_dim=dim_out, dim_out=dim_out)
+        self.cond_inject = ConditionInject(dim_out=dim_out)
+
+        self.block1 = Block(dim=dim, 
+                            dim_out=dim_out, 
+                            groups=groups)
+        self.block2 = Block(dim=dim_out, 
+                            dim_out=dim_out, 
+                            groups=groups)
+        if dim != dim_out:
+            self.res_conv = torch.nn.Conv2d(in_channels=dim, 
+                                            out_channels=dim_out, 
+                                            kernel_size=1)
+        else:
+            self.res_conv = torch.nn.Identity()
+
+    def forward(self, x, mask, time_emb, spk_emb, cond):
+        h = self.block1(x, mask)
+        h = self.cond_inject(h, cond, mask)
+        h = self.time_inject(h, time_emb, mask)
+        h = self.spk_inject(h, spk_emb, mask)
+        h = self.block2(h, mask)
+        output = h + self.res_conv(x * mask)
+        return output
 
 class LinearAttention(BaseModule):
     def __init__(self, dim, heads=4, dim_head=32):
@@ -723,6 +847,104 @@ class ResNetBlockDenoiser(BaseModule):
         return (x + residual) / math.sqrt(2.0), skip
     
 
+class ConsistencyDenoiserEstimator(BaseModule):
+    def __init__(self, dim, dim_mults=(1, 2, 4), groups=8, 
+                 spk_emb_dim=64, pe_scale=1000):
+        super(ConsistencyDenoiserEstimator, self).__init__()
+        self.dim = dim
+        self.dim_mults = dim_mults
+        self.groups = groups
+        self.spk_emb_dim = spk_emb_dim
+        self.pe_scale = pe_scale
+        
+        self.spk_mlp = torch.nn.Sequential(torch.nn.Linear(in_features=spk_emb_dim, out_features=spk_emb_dim * 4), 
+                                            Mish(),
+                                            torch.nn.Linear(in_features=spk_emb_dim * 4, out_features=dim))
+        self.time_pos_emb = SinusoidalPosEmb(dim=dim)
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(in_features=dim, out_features=dim * 4), 
+                                       Mish(),
+                                       torch.nn.Linear(in_features=dim * 4, out_features=dim))
+
+        dims = [1, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+        self.downs = torch.nn.ModuleList([])
+        self.ups = torch.nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+            self.downs.append(torch.nn.ModuleList([
+                       ResNetBlockWithSpeakerAndConditionInject(dim=dim_in, dim_out=dim_out, time_emb_dim=dim, spk_emb_dim=dim),
+                       ResNetBlockWithSpeakerAndConditionInject(dim=dim_out, dim_out=dim_out, time_emb_dim=dim, spk_emb_dim=dim),
+                       Residual(fn=Rezero(fn=LinearAttention(dim=dim_out))),
+                       Downsample(dim=dim_out) if not is_last else torch.nn.Identity(),
+                       DownsampleMu() if not is_last else torch.nn.Identity()]))
+
+        mid_dim = dims[-1]
+        self.mid_block1 = ResNetBlockWithSpeakerAndConditionInject(dim=mid_dim, dim_out=mid_dim, time_emb_dim=dim, spk_emb_dim=dim)
+        self.mid_attn = Residual(fn=Rezero(fn=LinearAttention(dim=mid_dim)))
+        self.mid_block2 = ResNetBlockWithSpeakerAndConditionInject(dim=mid_dim, dim_out=mid_dim, time_emb_dim=dim, spk_emb_dim=dim)
+
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+            self.ups.append(torch.nn.ModuleList([
+                     ResNetBlockWithSpeakerAndConditionInject(dim=dim_out * 2, dim_out=dim_in, time_emb_dim=dim, spk_emb_dim=dim),
+                     ResNetBlockWithSpeakerAndConditionInject(dim=dim_in, dim_out=dim_in, time_emb_dim=dim, spk_emb_dim=dim),
+                     Residual(fn=Rezero(fn=LinearAttention(dim=dim_in))),
+                     Upsample(dim=dim_in),
+                     UpsampleMu()]))
+        self.final_block = Block(dim=dim, dim_out=dim)
+        self.final_conv = torch.nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1)
+
+    def forward(self, x, mask, mu, t, spk=None):
+        s = self.spk_mlp(spk)
+        
+        t = self.time_pos_emb(t, scale=self.pe_scale)
+        t = self.mlp(t)
+
+        x = x.unsqueeze(1)
+        mask = mask.unsqueeze(1)
+
+        mu = (mu - mu.mean(dim=2, keepdim=True)) / (mu.std(dim=2, keepdim=True) + 1e-5)
+        mu = mu.unsqueeze(1)
+
+        mu = mu * mask
+        
+
+        hiddens = []
+        masks = [mask]
+        for resnet1, resnet2, attn, downsample, downsample_mu in self.downs:
+            mask_down = masks[-1]
+            x = resnet1(x, mask_down, t, s, mu)
+            x = resnet2(x, mask_down, t, s, mu)
+            x = attn(x)
+            hiddens.append(x)
+            x = downsample(x * mask_down)
+            mu = downsample_mu(mu * mask_down)
+            mu = (mu - mu.mean(dim=-1, keepdim=True)) / (mu.std(dim=-1, keepdim=True) + 1e-5)
+            masks.append(mask_down[:, :, :, ::2])
+
+        masks = masks[:-1]
+        mask_mid = masks[-1]
+        x = self.mid_block1(x, mask_mid, t, s, mu)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x, mask_mid, t, s, mu)
+
+        for resnet1, resnet2, attn, upsample, upsample_mu in self.ups:
+            mask_up = masks.pop()
+            x = torch.cat((x, hiddens.pop()), dim=1)
+            x = resnet1(x, mask_up, t, s, mu)
+            x = resnet2(x, mask_up, t, s, mu)
+            x = attn(x)
+            x = upsample(x * mask_up)
+            mu = upsample_mu(mu * mask_up)
+            mu = (mu - mu.mean(dim=-1, keepdim=True)) / (mu.std(dim=-1, keepdim=True) + 1e-5)
+
+        x = self.final_block(x, mask)
+        output = self.final_conv(x * mask)
+
+        return (output * mask).squeeze(1)
+    
+
 class ConsistencyDenoiser(BaseModule):
     def __init__(
             self, 
@@ -846,6 +1068,7 @@ class ConsistencyDiffusion(BaseModule):
         self.end_scales = end_scales
         self.num_scales = self.start_scales
         self.weight_schedule = weight_schedule
+        self.use_new_architecture = True
 
         # self.estimator = ConsistencyDenoiser(
         #     num_blocks=num_blocks,
@@ -863,21 +1086,38 @@ class ConsistencyDiffusion(BaseModule):
         #     pe_scale=pe_scale
         # )
 
-        self.estimator = GradLogPEstimator2d(
-            dim=dim,
-            n_spks=2,
-            spk_emb_dim=spk_emb_dim,
-            n_feats=n_feats,
-            pe_scale=pe_scale
-        )
+        if self.use_new_architecture:
+            self.estimator = ConsistencyDenoiserEstimator(
+                dim=dim,
+                dim_mults=(1, 2, 4),
+                groups=8,
+                spk_emb_dim=spk_emb_dim,
+                pe_scale=pe_scale
+            )
 
-        self.target_estimator = GradLogPEstimator2d(
-            dim=dim,
-            n_spks=2,
-            spk_emb_dim=spk_emb_dim,
-            n_feats=n_feats,
-            pe_scale=pe_scale
-        )
+            self.target_estimator = ConsistencyDenoiserEstimator(
+                dim=dim,
+                dim_mults=(1, 2, 4),
+                groups=8,
+                spk_emb_dim=spk_emb_dim,
+                pe_scale=pe_scale
+            )
+        else:
+            self.estimator = GradLogPEstimator2d(
+                dim=dim,
+                n_spks=2,
+                spk_emb_dim=spk_emb_dim,
+                n_feats=n_feats,
+                pe_scale=pe_scale
+            )
+
+            self.target_estimator = GradLogPEstimator2d(
+                dim=dim,
+                n_spks=2,
+                spk_emb_dim=spk_emb_dim,
+                n_feats=n_feats,
+                pe_scale=pe_scale
+            )
 
         self.target_estimator.requires_grad_(False)
         self.copy_target_params()
