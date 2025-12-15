@@ -145,6 +145,91 @@ class CalFeature:
                     break  # Once a cover is found, the search for the next one stops.
 
         return n / len(B_features)
+    
+    @staticmethod
+    def manifold_estimate_faiss(A_features, B_features, k):
+        # """
+        # This implementation uses FAISS for acceleration. It requires FAISS to be installed.
+        # :param A_features:
+        # :param B_features:
+        # :param k:
+        # :return:
+        # """
+        # import faiss
+
+        # d = A_features.shape[1]  # Dimension of the feature
+        # index = faiss.IndexFlatL2(d)  # Build the index
+        # index.add(A_features.astype(np.float32))  # Add A features to the index
+
+        # # Search for the k+1 nearest neighbors in A for each feature in A to get the k-th distance
+        # D_A, I_A = index.search(A_features.astype(np.float32), k + 1)
+        # kth_distances = D_A[:, -1]  # The k-th nearest distance for each feature in A
+
+        # # Now search for the nearest neighbors in A for each feature in B
+        # D_B, I_B = index.search(B_features.astype(np.float32), 1)
+
+        # count = 0
+        # for i in range(B_features.shape[0]):
+        #     if np.any(D_B[i] <= kth_distances):
+        #         count += 1
+
+        # return count / B_features.shape[0]
+        """
+        Manifold coverage estimation using k-NN (Faiss).
+
+        Parameters
+        ----------
+        A_features : np.ndarray, shape (N_A, D)
+            Reference feature set (defines the manifold).
+        B_features : np.ndarray, shape (N_B, D)
+            Query feature set (to be covered).
+        k : int
+            k-th nearest neighbor for radius estimation.
+
+        Returns
+        -------
+        float
+            Coverage ratio of B by A.
+        """
+        import faiss
+        # Ensure float32 (Faiss requirement)
+        A = np.ascontiguousarray(A_features, dtype=np.float32)
+        B = np.ascontiguousarray(B_features, dtype=np.float32)
+
+        dim = A.shape[1]
+
+        # --------------------------------------------------
+        # 1. Build index on A
+        # --------------------------------------------------
+        index = faiss.IndexFlatL2(dim)   # exact L2 k-NN
+        index.add(A)
+
+        # --------------------------------------------------
+        # 2. Compute k-NN radius for each point in A
+        #    (k+1 because nearest neighbor is itself)
+        # --------------------------------------------------
+        distances_A, _ = index.search(A, k + 1)
+
+        # distances are squared L2
+        # radius r_i = sqrt(dist to k-th neighbor)
+        radii = np.sqrt(distances_A[:, k])   # shape: (N_A,)
+
+        # --------------------------------------------------
+        # 3. For each b_j, find nearest a_i
+        # --------------------------------------------------
+        distances_B, indices_B = index.search(B, 1)
+
+        # nearest distance
+        d_ba = np.sqrt(distances_B[:, 0])     # shape: (N_B,)
+        nearest_a_idx = indices_B[:, 0]
+
+        # --------------------------------------------------
+        # 4. Check manifold condition
+        #    dist(b_j, a_i) <= r_i
+        # --------------------------------------------------
+        covered = d_ba <= radii[nearest_a_idx]
+
+        return float(np.mean(covered))
 
 
 class CalFidSeries(CalFeature):
@@ -363,7 +448,7 @@ class CalRecall(CalFeature):
         synth_features = self.get_feature(file_list=synth_wav_list, feature_type=feature_type)
         ref_features = self.get_feature(file_list=ref_wav_list, feature_type=feature_type)
 
-        recall_value = self.manifold_estimate(
+        recall_value = self.manifold_estimate_faiss(
             A_features=ref_features,
             B_features=synth_features,
             k=self.k
@@ -418,7 +503,7 @@ class CalPrecision(CalFeature):
         synth_features = self.get_feature(file_list=synth_wav_list, feature_type=feature_type)
         ref_features = self.get_feature(file_list=ref_wav_list, feature_type=feature_type)
 
-        precision_value = self.manifold_estimate(
+        precision_value = self.manifold_estimate_faiss(
             A_features=synth_features,
             B_features=ref_features,
             k=self.k
