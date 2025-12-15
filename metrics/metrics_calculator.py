@@ -418,10 +418,10 @@ class MetricCalculator:
             return log_spec_dB_const * math.sqrt(np.inner(diff, diff))
 
         def wav2mcep_numpy(wavfile, alpha=alpha, fft_size=fft_size, mcep_size=mcep_size, type=None):
-            wav, _ = librosa.load(wavfile, sr=self.SAMPLING_RATE, mono=True)
+            wav, _ = librosa.load(wavfile, sr=self.sampling_rate, mono=True)
             # Use WORLD vocoder to spectral envelope
-            _, sp, _ = pyworld.wav2world(wav.astype(np.double), fs=self.SAMPLING_RATE,
-                                         frame_period=self.FRAME_PERIOD, fft_size=fft_size)
+            _, sp, _ = pyworld.wav2world(wav.astype(np.double), fs=self.sampling_rate,
+                                         frame_period=self.frame_period, fft_size=fft_size)
             # Extract MCEP features
             mcep = pysptk.sptk.mcep(sp, order=mcep_size, alpha=alpha, maxiter=0,
                                    etype=1, eps=1.0E-8, min_det=0.0, itype=3)
@@ -537,7 +537,7 @@ class MetricCalculator:
         Create the MOS tool only when used, and create it only once.
         """
         if self.mos_tool is None:
-            self.mos_tool = MOSCal(sample_rate=self.SAMPLING_RATE)
+            self.mos_tool = MOSCal(sample_rate=self.sampling_rate)
     
     def _get_file_list_mean_mos(self, filename_list, mos_type="mb"):
         self._mos_init()
@@ -630,7 +630,7 @@ class MetricCalculator:
 
                 # fpath = Path(wav_to_16000(wav_filepath))
                 wav = wav_to_16000(wav_filepath)
-                wav = preprocess_wav(wav=wav)
+                wav = preprocess_wav(fpath_or_wav=wav)
 
                 encoder = VoiceEncoder()
                 return encoder.embed_utterance(wav)
@@ -675,19 +675,19 @@ class MetricCalculator:
     
     def compute_mfcc_cos(self):
         def get_pair_mfcc_cos(synth_wav_path, ref_wav_path):
-            mfcc_synth = librosa.feature.mfcc(y=librosa.load(synth_wav_path)[0], sr=self.SAMPLING_RATE)
-            mfcc2_ref = librosa.feature.mfcc(y=librosa.load(ref_wav_path)[0], sr=self.SAMPLING_RATE)
+            mfcc_synth = librosa.feature.mfcc(y=librosa.load(synth_wav_path)[0], sr=self.sampling_rate)
+            mfcc_ref = librosa.feature.mfcc(y=librosa.load(ref_wav_path)[0], sr=self.sampling_rate)
             # Use fastdtw to align the two MFCC feature matrices
-            _, path = fastdtw(mfcc_synth.T, mfcc2_ref.T)
+            _, path = fastdtw(mfcc_synth.T, mfcc_ref.T)
             # Aligned feature matrices
             aligned_mfcc_synth = mfcc_synth[:, [p[0] for p in path]].T
-            aligned_mfcc2_ref = mfcc2_ref[:, [p[1] for p in path]].T
+            aligned_mfcc_ref = mfcc_ref[:, [p[1] for p in path]].T
             # Normalize the aligned MFCC features
             aligned_mfcc_synth = aligned_mfcc_synth / np.linalg.norm(aligned_mfcc_synth, axis=0)
-            aligned_mfcc2_ref = aligned_mfcc2_ref / np.linalg.norm(aligned_mfcc2_ref, axis=0)
+            aligned_mfcc_ref = aligned_mfcc_ref / np.linalg.norm(aligned_mfcc_ref, axis=0)
             return cosine_similarity(
                 aligned_mfcc_synth.reshape(1, -1),
-                aligned_mfcc2_ref.reshape(1, -1)
+                aligned_mfcc_ref.reshape(1, -1)
             )
         mfcc_cos_list = []
         for speaker_id, wav_file_pairs in self.speakers_to_synth_wavs_and_reference.items():
@@ -782,8 +782,8 @@ class MetricCalculator:
     
     def compute_mfcc_e_cos(self):
         def get_pair_mfcc_cos(synth_wav_path, ref_wav_path):
-            mfcc_synth = librosa.feature.mfcc(y=librosa.load(synth_wav_path)[0], sr=self.SAMPLING_RATE)
-            mfcc_ref = librosa.feature.mfcc(y=librosa.load(ref_wav_path)[0], sr=self.SAMPLING_RATE)
+            mfcc_synth = librosa.feature.mfcc(y=librosa.load(synth_wav_path)[0], sr=self.sampling_rate)
+            mfcc_ref = librosa.feature.mfcc(y=librosa.load(ref_wav_path)[0], sr=self.sampling_rate)
             # Use fastdtw to align the two MFCC feature matrices
             _, path = fastdtw(mfcc_synth.T, mfcc_ref.T)
             # Aligned feature matrices
@@ -829,7 +829,12 @@ class MetricCalculator:
             return wav_raw.astype(np.float32), wav.astype(np.float32), int(duration)
 
         args = argparse.Namespace(**arg_dit)
-        speaker_emb = PreDefinedEmbedder(args)
+        speaker_emb = PreDefinedEmbedder(
+            sampling_rate=args.sampling_rate,
+            win_length=args.win_length,
+            embedder_type=args.speaker_embedder,
+            embedder_cuda=args.speaker_embedder_cuda,
+        )
         cosine_score = []
         for speaker_id, wav_file_pairs in self.speakers_to_synth_wavs_and_reference.items():
             for wav_file_pair in tqdm(wav_file_pairs, desc=f"Computing Deep Speaker Cosine Similarity for speaker {speaker_id}"):

@@ -49,7 +49,7 @@ class MOSCal:
             spectrum=wav,
             include_meanspk=False
         )
-        return pred_mean_scores.detach().numpy()[0]
+        return pred_mean_scores.cpu().detach().numpy()[0]
 
     def get_mb_mos(self, wav_path):
         if self.mb_net_model is None:
@@ -64,4 +64,4 @@ class MOSCal:
             spectrum=wav,
         )
         # Predict for each frame, then average
-        return torch.mean(mean_scores).detach().numpy()
+        return torch.mean(mean_scores).cpu().detach().numpy()
