@@ -25,4 +25,13 @@ if __name__ == "__main__":
         reference_data_dir=reference_data_dir
     )
 
-    metrics_cal.get_all_metrics()
+    metrics = metrics_cal.get_all_metrics()
+
+    save_dir = "metrics_results"
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+
+    with open(os.path.join(save_dir, f"metrics_{model_name}_eval_for_dataset_{dataset_name}.json"), "w") as f:
+        json.dump(metrics, f, indent=4)
+    print(f"Metrics saved to {os.path.join(save_dir, f'metrics_{model_name}_eval_for_dataset_{dataset_name}.json')}")
