@@ -3,6 +3,8 @@ import argparse
 import json
 import datetime as dt
 
+import random
+
 from tqdm import tqdm
 import numpy as np
 from scipy.io.wavfile import write
@@ -37,7 +39,7 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError("Boolean value expected.")
     
-def enumerate_text_files_and_read(data_dir: str):
+def enumerate_text_files_and_read(data_dir: str, ratio: float, seed: int=42):
     speaker_to_texts_and_filenames = dict()
     for dirs, _, files in os.walk(data_dir):
         for file in tqdm(files):
@@ -50,7 +52,17 @@ def enumerate_text_files_and_read(data_dir: str):
                     speaker_to_texts_and_filenames[speaker_id] = []
                 speaker_to_texts_and_filenames[speaker_id].append({"text": text, "file_name": file.replace(".lab", ".wav").replace(".txt", ".wav")})
 
-    return speaker_to_texts_and_filenames
+    random.seed(seed)
+
+    sampled_speaker_to_files = dict()
+    for speaker_id, items in speaker_to_texts_and_filenames.items():
+        n_total = len(items)
+        n_keep = max(1, int(n_total * ratio))  # đảm bảo ít nhất 1 file
+
+        sampled_items = random.sample(items, n_keep)
+        sampled_speaker_to_files[speaker_id] = sampled_items
+
+    return sampled_speaker_to_files
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -82,6 +94,8 @@ def get_args():
 
     parser.add_argument("--use_saln", type=str2bool, default=True)
     parser.add_argument("--use_additive", type=str2bool, default=False)
+
+    parser.add_argument("--ratio", type=float, default=0.2, help="Ratio of data to synthesize (between 0 and 1)")
 
     args = parser.parse_args()
 
@@ -123,6 +137,8 @@ if __name__ == "__main__":
     use_saln = args.use_saln
     use_additive = args.use_additive
 
+    ratio = args.ratio
+
     if dataset_name.lower() == "ljspeech":
         multi_speaker = False
     elif dataset_name.lower() in ["vctk", "libritts"]:
@@ -132,7 +148,7 @@ if __name__ == "__main__":
 
     save_dir = os.path.join(save_dir, os.path.splitext(os.path.basename(checkpoint))[0], dataset_name)
 
-    speaker_to_texts_and_filenames = enumerate_text_files_and_read(os.path.join(dataset_dir, dataset_name))
+    speaker_to_texts_and_filenames = enumerate_text_files_and_read(os.path.join(dataset_dir, dataset_name), ratio=ratio, seed=42)
 
     print("Initializing model...")
 
