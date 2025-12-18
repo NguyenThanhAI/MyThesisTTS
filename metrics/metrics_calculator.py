@@ -852,7 +852,7 @@ class MetricCalculator:
     def get_all_metrics(self):
         results = dict()
         # results["wer"] = self.compute_wer()
-        results["wer_un_comman"] = self.compute_wer_un_comma()
+        # results["wer_un_comma"] = self.compute_wer_un_comma()
         # results["si_sdr"] = self.compute_si_sdr()
         # results["f0_corr"] = self.compute_f0_corr()
         # results["f0_rmse"] = self.compute_f0_rmse()
