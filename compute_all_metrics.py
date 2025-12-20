@@ -11,6 +11,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=False, default="grad_tts_multi_speaker_LJSpeech_use_saln_steps_1167000", help="Name of the model.")
     parser.add_argument("--dataset_name", type=str, required=False, default="LJSpeech", help="Name of the dataset.")
     parser.add_argument("--reference_data_dir", type=str, required=False, default=r"D:\TTS_Raw_Dataset", help="Path to the reference data directory.")
+    parser.add_argument("--save_dir", type=str, default="metrics_results", help="Directory to save the computed metrics.")
     parser.add_argument("--metrics_list", type=str, nargs='+', default=["wer_un_comma"], help="List of metrics to compute.")
     args = parser.parse_args()
 
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 
     print(f"Computed Metrics: {json.dumps(metrics, indent=4)}")
 
-    save_dir = "metrics_results"
+    save_dir = args.save_dir
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
