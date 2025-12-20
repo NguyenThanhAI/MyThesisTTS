@@ -202,7 +202,7 @@ class MetricCalculator:
         return fid_cal_tool(feature_type="mel", norm=False)
     
     def compute_wer_un_comma(self):
-        model = whisper.load_model("large", device=self.device)
+        model = whisper.load_model("medium", device=self.device)
 
         groundtruth_texts = []
         hypothesis_texts = []
@@ -235,7 +235,7 @@ class MetricCalculator:
         return wer
     
     def compute_wer(self):
-        model = whisper.load_model("large", device=self.device)
+        model = whisper.load_model("medium", device=self.device)
 
         groundtruth_texts = []
         hypothesis_texts = []
