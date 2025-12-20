@@ -20,6 +20,8 @@ if __name__ == "__main__":
     reference_data_dir = args.reference_data_dir
     metrics_list = args.metrics_list
 
+    print(f"Arguments: {args}")
+
     metrics_cal = MetricCalculator(
         synthetized_data_dir=synthesized_data_dir,
         model_name=model_name,
@@ -28,8 +30,10 @@ if __name__ == "__main__":
     )
 
     if metrics_list is not None:
+        print(f"Computing specified metrics: {metrics_list}")
         metrics = metrics_cal.get_metrics_by_list(metric_list=metrics_list)
     else:
+        print("Computing all available metrics.")
         metrics = metrics_cal.get_all_metrics()
 
     print(f"Computed Metrics: {json.dumps(metrics, indent=4)}")
