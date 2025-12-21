@@ -887,7 +887,7 @@ class MetricCalculator:
         results["mfcc_cos"] = self.compute_mfcc_cos()
         # results["mel_sdr"] = self.compute_mel_sdr()
         results["mfcc_e_cos"] = self.compute_mfcc_e_cos()
-        results["deep_speaker_cos"] = self.compute_deep_speaker_cos()
+        # results["deep_speaker_cos"] = self.compute_deep_speaker_cos()
         return results
     
     def get_metrics_by_list(self, metric_list: List[str]):
