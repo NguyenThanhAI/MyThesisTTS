@@ -542,12 +542,12 @@ class MetricCalculator:
     def _get_file_list_mean_mos(self, filename_list, mos_type="mb"):
         self._mos_init()
         if mos_type == "mb":
-            return np.mean(np.array(list(map(self.mos_tool.get_mb_mos, filename_list))))
+            return np.mean(np.array(list(map(self.mos_tool.get_mb_mos, tqdm(filename_list, desc=f"MB MOS")))))
         elif mos_type == "ld":
-            return np.mean(np.array(list(map(self.mos_tool.get_ld_mos, filename_list))))
+            return np.mean(np.array(list(map(self.mos_tool.get_ld_mos, tqdm(filename_list, desc=f"LD MOS")))))
         elif mos_type == "both":
-            mb_mos = np.mean(np.array(list(map(self.mos_tool.get_mb_mos, filename_list))))
-            ld_mos = np.mean(np.array(list(map(self.mos_tool.get_ld_mos, filename_list))))
+            mb_mos = np.mean(np.array(list(map(self.mos_tool.get_mb_mos, tqdm(filename_list, desc=f"MB MOS")))))
+            ld_mos = np.mean(np.array(list(map(self.mos_tool.get_ld_mos, tqdm(filename_list, desc=f"LD MOS")))))
             return (mb_mos + ld_mos) / 2.0
         else:
             raise NotImplementedError
@@ -583,6 +583,15 @@ class MetricCalculator:
                 ref_wav_path = wav_file_pair["reference_wav"]
                 target_list.append(ref_wav_path)
         return self._get_file_list_mean_mos(filename_list=target_list, mos_type=mos_type)
+    
+    def compute_target_mb_mos(self):
+        return self.get_target_mos(mos_type="mb")
+    
+    def compute_target_ld_mos(self):
+        return self.get_target_mos(mos_type="ld")
+    
+    def compute_target_mb_ld_mos(self):
+        return self.get_target_mos(mos_type="both")
     
     def compute_ffe(self):
         # SAMPLING_RATE = 22050
@@ -867,12 +876,12 @@ class MetricCalculator:
         results["fid_mel"] = self.compute_fid_mel()
         results["fid_mfcc"] = self.compute_fid_mfcc()
         results["fid_mfcc_un_norm"] = self.compute_fid_mfcc_un_norm()
-        results["mb_mos"] = self.compute_mb_mos()
-        results["ld_mos"] = self.compute_ld_mos()
-        results["mb_ld_mos"] = self.compute_mb_ld_mos()
-        results["target_mb_mos"] = self.get_target_mos(mos_type="mb")
-        results["target_ld_mos"] = self.get_target_mos(mos_type="ld")
-        results["target_mb_ld_mos"] = self.get_target_mos(mos_type="both")
+        # results["mb_mos"] = self.compute_mb_mos()
+        # results["ld_mos"] = self.compute_ld_mos()
+        # results["mb_ld_mos"] = self.compute_mb_ld_mos()
+        # results["target_mb_mos"] = self.compute_target_mb_mos()
+        # results["target_ld_mos"] = self.compute_target_ld_mos()
+        # results["target_mb_ld_mos"] = self.compute_target_mb_ld_mos()
         results["ffe"] = self.compute_ffe()
         #results["speaker_cos"] = self.compute_speaker_cos()
         results["mfcc_cos"] = self.compute_mfcc_cos()
