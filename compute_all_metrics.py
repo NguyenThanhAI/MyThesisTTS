@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, required=False, default="LJSpeech", help="Name of the dataset.")
     parser.add_argument("--reference_data_dir", type=str, required=False, default=r"D:\TTS_Raw_Dataset", help="Path to the reference data directory.")
     parser.add_argument("--save_dir", type=str, default="metrics_results", help="Directory to save the computed metrics.")
-    parser.add_argument("--metrics_list", type=str, nargs='+', default=["wer_un_comma"], help="List of metrics to compute.")
+    parser.add_argument("--metrics_list", type=str, nargs='+', default=None, help="List of metrics to compute.")
     args = parser.parse_args()
 
     synthesized_data_dir = args.synthesized_data_dir
