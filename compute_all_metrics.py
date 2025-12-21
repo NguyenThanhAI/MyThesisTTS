@@ -4,6 +4,20 @@ import json
 import numpy as np
 from metrics.metrics_calculator import MetricCalculator
 
+def to_json_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: to_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_json_serializable(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(to_json_serializable(v) for v in obj)
+    elif isinstance(obj, np.generic):  # np.float32, np.int64, ...
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -37,7 +51,7 @@ if __name__ == "__main__":
         print("Computing all available metrics.")
         metrics = metrics_cal.get_all_metrics()
 
-    print(f"Computed Metrics: {json.dumps(metrics, indent=4)}")
+    print(f"Computed Metrics: {metrics}")
 
     save_dir = args.save_dir
 
@@ -45,5 +59,5 @@ if __name__ == "__main__":
         os.makedirs(save_dir, exist_ok=True)
 
     with open(os.path.join(save_dir, f"metrics_{model_name}_eval_for_dataset_{dataset_name}.json"), "w") as f:
-        json.dump(metrics, f, indent=4)
+        json.dump(to_json_serializable(metrics), f, indent=4)
     print(f"Metrics saved to {os.path.join(save_dir, f'metrics_{model_name}_eval_for_dataset_{dataset_name}.json')}")
