@@ -868,7 +868,7 @@ class MetricCalculator:
         # results["log_f0_rmse"] = self.compute_log_f0()
         results["ssim"] = self.compute_ssim()
         # results["mcd"] = self.compute_mcd()
-        results["mcd24"] = self.compute_mcd24()
+        # results["mcd24"] = self.compute_mcd24()
         results["precision_mel"] = self.compute_precision_mel()
         results["precision_mfcc"] = self.compute_precision_mfcc()
         results["recall_mel"] = self.compute_recall_mel()
