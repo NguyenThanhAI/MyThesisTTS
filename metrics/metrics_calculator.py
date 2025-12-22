@@ -494,9 +494,11 @@ class MetricCalculator:
         return precision_cal_tool(feature_type=feature_type)
     
     def compute_precision_mel(self):
+        print("===================================Compute precision mel===================================")
         return self._compute_precision("mel")
 
     def compute_precision_mfcc(self):
+        print("===================================Compute precision mfcc===================================")
         return self._compute_precision("mfcc")
     
     def _compute_recall(self, feature_type):
@@ -509,9 +511,11 @@ class MetricCalculator:
         return recall_cal_tool(feature_type)
     
     def compute_recall_mfcc(self):
+        print("===================================Compute recall mfcc===================================")
         return self._compute_recall("mfcc")
 
     def compute_recall_mel(self):
+        print("===================================Compute recall mel===================================")
         return self._compute_recall("mel")
     
     def _compute_fid(self, feature_type):
@@ -524,12 +528,14 @@ class MetricCalculator:
         return fid_cal_tool(feature_type)
     
     def compute_fid_mfcc(self):
+        print("===================================Compute FID MFCC===================================")
         return self._compute_fid("mfcc")
 
     def compute_fid_mfcc_un_norm(self):
         return self._compute_fid("mfcc_un_norm")
 
     def compute_fid_mel(self):
+        print("===================================compute FID mel===================================")
         return self._compute_fid("mel")
     
     def _mos_init(self):
@@ -869,10 +875,10 @@ class MetricCalculator:
         results["ssim"] = self.compute_ssim()
         # results["mcd"] = self.compute_mcd()
         # results["mcd24"] = self.compute_mcd24()
-        results["precision_mel"] = self.compute_precision_mel()
-        results["precision_mfcc"] = self.compute_precision_mfcc()
-        results["recall_mel"] = self.compute_recall_mel()
-        results["recall_mfcc"] = self.compute_recall_mfcc()
+        # results["precision_mel"] = self.compute_precision_mel()
+        # results["precision_mfcc"] = self.compute_precision_mfcc()
+        # results["recall_mel"] = self.compute_recall_mel()
+        # results["recall_mfcc"] = self.compute_recall_mfcc()
         results["fid_mel"] = self.compute_fid_mel()
         results["fid_mfcc"] = self.compute_fid_mfcc()
         # results["fid_mfcc_un_norm"] = self.compute_fid_mfcc_un_norm()
