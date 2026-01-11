@@ -596,6 +596,56 @@ class TextEncoder(BaseModule):
         return mu, logw, x_mask
     
 
+class TextIsolationEncoder(TextEncoder):
+    def __init__(
+            self, 
+            n_vocab, 
+            n_feats, 
+            n_channels, 
+            filter_channels, 
+            filter_channels_dp, 
+            n_heads, 
+            n_layers, 
+            kernel_size, 
+            p_dropout, 
+            window_size=None, 
+            spk_emb_dim=64, 
+            n_spks=1
+        ):
+        super(TextIsolationEncoder, self).__init__(
+            n_vocab=n_vocab,
+            n_feats=n_feats,
+            n_channels=n_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            kernel_size=kernel_size,
+            p_dropout=p_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+            n_spks=n_spks
+        )
+
+    def forward(self, x, x_lengths, spk=None):
+        x = self.emb(x) * math.sqrt(self.n_channels)
+        x = self.pos_emb(x)
+        x = torch.transpose(x, 1, -1)
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
+        x = self.prenet(x, x_mask)
+        if self.n_spks > 1:
+            assert spk is not None
+            x = torch.cat([x, spk.unsqueeze(-1).repeat(1, 1, x.shape[-1])], dim=1)
+        x = self.encoder(x, x_mask)
+        mu = self.proj_m(x) * x_mask
+
+        x_dp = torch.detach(x)
+        logw = self.proj_w(x_dp, x_mask)
+
+        return x, mu, logw, x_mask
+    
+
 class StyleTextEncoder(BaseModule):
     def __init__(self, n_vocab, n_feats, n_channels, filter_channels, 
                  filter_channels_dp, n_heads, n_layers, kernel_size, 
@@ -666,6 +716,54 @@ class StyleTextEncoder(BaseModule):
         return mu, logw, x_mask
     
 
+class StyleTextIsolationEncoder(StyleTextEncoder):
+    def __init__(
+            self, 
+            n_vocab, 
+            n_feats, 
+            n_channels, 
+            filter_channels, 
+            filter_channels_dp, 
+            n_heads, 
+            n_layers, 
+            kernel_size, 
+            p_dropout, 
+            window_size=None, 
+            spk_emb_dim=64
+        ):
+        
+        super(StyleTextIsolationEncoder, self).__init__(
+            n_vocab=n_vocab,
+            n_feats=n_feats,
+            n_channels=n_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            kernel_size=kernel_size,
+            p_dropout=p_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim
+        )
+
+    def forward(self, x, x_lengths, spk_emb):  
+        x = self.emb(x) * math.sqrt(self.n_channels)
+        x = self.pos_emb(x)
+        x = torch.transpose(x, 1, -1)
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
+        x = self.prenet(x, x_mask)
+
+        x = self.encoder(x, x_mask, spk_emb)
+
+        mu = self.proj_m(x) * x_mask
+
+        x_dp = torch.detach(x)
+        logw = self.proj_w(x_dp, x_mask)
+
+        return x, mu, logw, x_mask
+    
+
 class StyleAdditiveTextEncoder(BaseModule):
     def __init__(self, n_vocab, n_feats, n_channels, filter_channels, 
                  filter_channels_dp, n_heads, n_layers, kernel_size, 
@@ -734,6 +832,54 @@ class StyleAdditiveTextEncoder(BaseModule):
         logw = self.proj_w.forward(x=x_dp, x_mask=x_mask, spk_emb=spk_emb)
 
         return mu, logw, x_mask
+    
+
+class StyleAdditiveTextIsolationEncoder(StyleAdditiveTextEncoder):
+    def __init__(
+            self, 
+            n_vocab, 
+            n_feats, 
+            n_channels, 
+            filter_channels, 
+            filter_channels_dp, 
+            n_heads, 
+            n_layers, 
+            kernel_size, 
+            p_dropout, 
+            window_size=None, 
+            spk_emb_dim=64
+        ):
+        
+        super(StyleAdditiveTextIsolationEncoder, self).__init__(
+            n_vocab=n_vocab,
+            n_feats=n_feats,
+            n_channels=n_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            kernel_size=kernel_size,
+            p_dropout=p_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim
+        )
+
+    def forward(self, x, x_lengths, spk_emb):  
+        x = self.emb(x) * math.sqrt(self.n_channels)
+        x = self.pos_emb(x)
+        x = torch.transpose(x, 1, -1)
+        x_mask = torch.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
+        x = self.prenet(x, x_mask)
+
+        x = self.encoder(x, x_mask, spk_emb)
+
+        mu = self.proj_m(x) * x_mask
+
+        x_dp = torch.detach(x)
+        logw = self.proj_w.forward(x=x_dp, x_mask=x_mask, spk_emb=spk_emb)
+
+        return x, mu, logw, x_mask
     
 
 class UniversalTextFeatureEncoder(BaseModule):

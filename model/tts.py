@@ -16,12 +16,14 @@ from model.base import BaseModule
 from model.text_encoder import TextEncoder, UniversalTextFeatureEncoder
 from model.text_encoder import StyleTextEncoder, StyleUniversalTextFeatureEncoder
 from model.text_encoder import StyleAdditiveTextEncoder
+from model.text_encoder import StyleTextIsolationEncoder, StyleAdditiveTextIsolationEncoder
 from model.align_encoder import Aligner, ForwardSumLoss, BinLoss
 from model.variance_adaptor import VarianceAdaptor
 from model.variance_adaptor import StyleVarianceAdaptor
 from model.diffusion import Diffusion
 from model.diffusion import ConsitencyTrigFlow
 from model.diffusion import ConsistencyDiffusion
+from model.diffusion import ConsistencyDiffusionWithMuFromIsolationTextEncoder
 from model.utils import sequence_mask, generate_path, duration_loss, fix_len_compatibility
 
 from model.loss import TotalLoss
@@ -853,6 +855,316 @@ class ConsistencyModelWithSpeakerEmbeddingAdditive(BaseModule):
 
         return dur_loss, prior_loss, consistency_loss, recon_loss
     
+
+class ConsistencyModelWithSpeakerEmbeddingAdditiveAndIsolation(BaseModule):
+    def __init__(
+            self,
+            n_vocab: int,
+            n_feats: int,
+            n_enc_channels: int,
+            filter_channels: int,
+            filter_channels_dp,
+            n_heads: int,
+            n_enc_layers: int,
+            enc_kernel_size: int,
+            enc_dropout: int,
+            window_size: int,
+            spk_emb_dim: int,
+            dec_dim: int,
+            num_warmup_steps: int,
+            total_steps: int,
+            num_dec_blocks: int,
+            pe_scale: int,
+            start_ema_rate: float,
+            sigma_max: float,
+            sigma_min: float,
+            rho: float,
+            sigma_data: float=0.5,
+            start_scales: int=3,
+            end_scales: int=200,
+            weight_schedule: str="karras"
+        ):
+        super(ConsistencyModelWithSpeakerEmbeddingAdditiveAndIsolation, self).__init__()
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+        self.dec_dim = dec_dim
+        self.num_warmup_steps = num_warmup_steps
+        self.total_steps = total_steps
+        self.num_dec_blocks = num_dec_blocks
+        self.pe_scale = pe_scale
+        self.start_ema_rate = start_ema_rate
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.sigma_data = sigma_data
+        self.start_scales = start_scales
+        self.end_scales = end_scales
+        self.weight_schedule = weight_schedule
+
+        self.encoder = StyleAdditiveTextIsolationEncoder(
+            n_vocab=n_vocab, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel_size,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+
+        self.decoder = ConsistencyDiffusionWithMuFromIsolationTextEncoder(
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            dim=dec_dim,
+            num_warmup_steps=num_warmup_steps,
+            total_steps=total_steps,
+            num_blocks=num_dec_blocks,
+            spk_emb_dim=spk_emb_dim,
+            pe_scale=pe_scale,
+            ema_rate=start_ema_rate,
+            sigma_max=sigma_max,
+            sigma_min=sigma_min,
+            rho=rho,
+            sigma_data=sigma_data,
+            start_scales=start_scales,
+            end_scales=end_scales,
+            weight_schedule=weight_schedule
+        )
+
+    def update_ema_target_params(self):
+        self.decoder.update_ema_target_params()
+
+    @torch.no_grad()
+    def forward(self, x, x_lengths, n_timesteps, temperature=1.0, stoc=False, spk: torch.Tensor=None, length_scale=1.0):
+
+        x, x_lengths = self.relocate_input([x, x_lengths])
+
+        conditioned_x, mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
+
+        w = torch.exp(input=logw) * x_mask
+        w_ceil = torch.ceil(input=w) * length_scale
+        y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
+        y_max_length = int(y_lengths.max())
+        y_max_length_ = fix_len_compatibility(length=y_max_length)
+
+        # Using obtained durations `w` construct alignment map `attn`
+        y_mask = sequence_mask(length=y_lengths, max_length=y_max_length_).unsqueeze(1).to(x_mask.dtype)
+        attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
+        attn = generate_path(duration=w_ceil.squeeze(1), mask=attn_mask.squeeze(1)).unsqueeze(1)
+
+        # Align encoded text and get mu_y
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
+        mu_y = mu_y.transpose(1, 2)
+        
+        conditioned_x = torch.matmul(attn.squeeze(1).transpose(1, 2), conditioned_x.transpose(1, 2))
+        conditioned_x = conditioned_x.transpose(1, 2)
+
+        encoder_outputs = mu_y[:, :, :y_max_length]
+
+        # Sample latent representation from terminal distribution N(mu_y, I)
+        z = torch.rand_like(
+            input=mu_y,
+            device=mu_y.device
+        ) * self.sigma_max
+
+        decoder_outputs = self.decoder.forward(
+            z=z,
+            mask=y_mask,
+            mu=conditioned_x,
+            n_timesteps=n_timesteps,
+            spk=spk
+        )
+
+        decoder_outputs = decoder_outputs[:, :, :y_max_length]
+
+        return encoder_outputs, decoder_outputs, attn[:, :, :y_max_length]
+
+    def compute_loss(self, x, x_lengths, y, y_lengths, step, spk=None, out_size=None):
+        """
+        Computes 3 losses:
+            1. duration loss: loss between predicted token durations and those extracted by Monotinic Alignment Search (MAS).
+            2. prior loss: loss between mel-spectrogram and encoder outputs.
+            3. consistency loss:
+            
+        Args:
+            x (torch.Tensor): batch of texts, converted to a tensor with phoneme embedding ids.
+            x_lengths (torch.Tensor): lengths of texts in batch.
+            y (torch.Tensor): batch of corresponding mel-spectrograms.
+            y_lengths (torch.Tensor): lengths of mel-spectrograms in batch.
+        """
+        x, x_lengths, y, y_lengths = self.relocate_input([x, x_lengths, y, y_lengths])
+
+        # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
+        conditioned_x, mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
+        y_max_length = y.shape[-1]
+
+        y_mask = sequence_mask(length=y_lengths, max_length=y_max_length).unsqueeze(1).to(x_mask)
+        attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
+
+        # Use MAS to find most likely alignment `attn` between text and mel-spectrogram
+        with torch.no_grad(): 
+            const = -0.5 * math.log(2 * math.pi) * self.n_feats
+            factor = -0.5 * torch.ones(mu_x.shape, dtype=mu_x.dtype, device=mu_x.device)
+            y_square = torch.matmul(factor.transpose(1, 2), y ** 2)
+            y_mu_double = torch.matmul(2.0 * (factor * mu_x).transpose(1, 2), y)
+            mu_square = torch.sum(factor * (mu_x ** 2), 1).unsqueeze(-1)
+            log_prior = y_square - y_mu_double + mu_square + const
+
+            attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1))
+            attn = attn.detach()
+
+        # Compute loss between predicted log-scaled durations and those obtained from MAS
+        logw_ = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
+        dur_loss = duration_loss(logw=logw, logw_=logw_, lengths=x_lengths)
+
+        # Cut a small segment of mel-spectrogram in order to increase batch size
+        if not isinstance(out_size, type(None)):
+            max_offset = (y_lengths - out_size).clamp(0)
+            offset_ranges = list(zip([0] * max_offset.shape[0], max_offset.cpu().numpy()))
+            out_offset = torch.LongTensor([
+                torch.tensor(random.choice(range(start, end)) if end > start else 0)
+                for start, end in offset_ranges
+            ]).to(y_lengths)
+            
+            attn_cut = torch.zeros(attn.shape[0], attn.shape[1], out_size, dtype=attn.dtype, device=attn.device)
+            y_cut = torch.zeros(y.shape[0], self.n_feats, out_size, dtype=y.dtype, device=y.device)
+            y_cut_lengths = []
+            for i, (y_, out_offset_) in enumerate(zip(y, out_offset)):
+                y_cut_length = out_size + (y_lengths[i] - out_size).clamp(None, 0)
+                y_cut_lengths.append(y_cut_length)
+                cut_lower, cut_upper = out_offset_, out_offset_ + y_cut_length
+                y_cut[i, :, :y_cut_length] = y_[:, cut_lower:cut_upper]
+                attn_cut[i, :, :y_cut_length] = attn[i, :, cut_lower:cut_upper]
+            y_cut_lengths = torch.LongTensor(y_cut_lengths)
+            y_cut_mask = sequence_mask(length=y_cut_lengths).unsqueeze(1).to(y_mask)
+            
+            attn = attn_cut
+            y = y_cut
+            y_mask = y_cut_mask
+        
+
+        # Align encoded text with mel-spectrogram and get mu_y segment
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
+        mu_y = mu_y.transpose(1, 2)
+
+        conditioned_x = torch.matmul(attn.squeeze(1).transpose(1, 2), conditioned_x.transpose(1, 2))
+        conditioned_x = conditioned_x.transpose(1, 2)
+
+        # Compute loss of consistency decode
+        consistency_loss, recon_loss, x_t = self.decoder.compute_loss(
+            x0=y,
+            mask=y_mask,
+            mu=conditioned_x,
+            step=step,
+            spk=spk
+        )
+
+        # Compute loss between aligned encoder outputs and mel-spectrogram
+        prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
+        prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
+
+        return dur_loss, prior_loss, consistency_loss, recon_loss
+    
+
+
+class ConsistencyModelWithSpeakerEmbeddingAndSALNAndIsolation(ConsistencyModelWithSpeakerEmbeddingAdditiveAndIsolation):
+    def __init__(
+            self,
+            n_vocab: int,
+            n_feats: int,
+            n_enc_channels: int,
+            filter_channels: int,
+            filter_channels_dp,
+            n_heads: int,
+            n_enc_layers: int,
+            enc_kernel_size: int,
+            enc_dropout: int,
+            window_size: int,
+            spk_emb_dim: int,
+            dec_dim: int,
+            num_warmup_steps: int,
+            total_steps: int,
+            num_dec_blocks: int,
+            pe_scale: int,
+            start_ema_rate: float,
+            sigma_max: float,
+            sigma_min: float,
+            rho: float,
+            sigma_data: float=0.5,
+            start_scales: int=3,
+            end_scales: int=200,
+            weight_schedule: str="karras"
+        ):
+        BaseModule.__init__(self=self)
+        self.n_vocab = n_vocab
+        self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel_size = enc_kernel_size
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.spk_emb_dim = spk_emb_dim
+        self.dec_dim = dec_dim
+        self.num_warmup_steps = num_warmup_steps
+        self.total_steps = total_steps
+        self.num_dec_blocks = num_dec_blocks
+        self.pe_scale = pe_scale
+        self.start_ema_rate = start_ema_rate
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.sigma_data = sigma_data
+        self.start_scales = start_scales
+        self.end_scales = end_scales
+        self.weight_schedule = weight_schedule
+
+        self.encoder = StyleTextIsolationEncoder(
+            n_vocab=n_vocab,
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel_size,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+
+        self.decoder = ConsistencyDiffusionWithMuFromIsolationTextEncoder(
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            dim=dec_dim,
+            num_warmup_steps=num_warmup_steps,
+            total_steps=total_steps,
+            num_blocks=num_dec_blocks,
+            spk_emb_dim=spk_emb_dim,
+            pe_scale=pe_scale,
+            ema_rate=start_ema_rate,
+            sigma_max=sigma_max,
+            sigma_min=sigma_min,
+            rho=rho,
+            sigma_data=sigma_data,
+            start_scales=start_scales,
+            end_scales=end_scales,
+            weight_schedule=weight_schedule
+        )
 
 class ConsistencyModelWithSpeakerEmbeddingAndSALN(ConsistencyModelWithSpeakerEmbeddingAdditive):
     def __init__(

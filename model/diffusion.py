@@ -640,15 +640,56 @@ class LinearNorm(BaseModule):
     def forward(self, x):
         x = self.linear(x)
         return x
+    
+
+class TimeMLP(BaseModule):
+    '''
+    naive introduce timestep information to feature maps with mlp and add shortcut
+    '''
+    def __init__(
+            self,
+            embedding_dim,
+            hidden_dim,
+            out_dim
+        ):
+        super().__init__()
+        self.mlp=torch.nn.Sequential(torch.nn.Linear(embedding_dim, hidden_dim),
+                                     torch.nn.SiLU(),
+                                     torch.nn.Linear(hidden_dim, out_dim))
+        self.act=torch.nn.SiLU()
+    def forward(self, x, t):
+        """
+        Docstring for forward
+        
+        :param self: Description
+        :param x: Description (B, C, T)
+        :param t: Description (B, embedding_dim)
+        """
+        emb = t  # t is already embedded
+        c = self.mlp(emb) + 1
+        
+        # PixelNorm as in sCM
+        c = c / torch.sqrt(torch.mean(c ** 2, dim=1, keepdim=True) + 1e-8)
+        
+        # Inject time conditioning
+        x = x * c.unsqueeze(2).to(x.dtype)
+        
+        return self.act(x)
 
 
 class ResNetBlockDenoiser(BaseModule):
-    def __init__(self, decoder_dim, speaker_emb_dim, n_feats):
+    def __init__(
+            self, 
+            decoder_dim, 
+            speaker_emb_dim, 
+            n_feats, 
+            n_enc_channels
+        ):
         super(ResNetBlockDenoiser, self).__init__()
         self.decoder_dim = decoder_dim
         self.speaker_emb_dim = speaker_emb_dim
         self.n_feats = n_feats
-
+        self.n_enc_channels = n_enc_channels
         self.speaker_projection = LinearNorm(
             in_features=speaker_emb_dim, 
             out_features=decoder_dim,
@@ -656,7 +697,7 @@ class ResNetBlockDenoiser(BaseModule):
         )
 
         self.condition_projection = ConvNorm(
-            in_channels=n_feats, 
+            in_channels=n_enc_channels, 
             out_channels=decoder_dim, 
             kernel_size=1, 
             stride=1, 
@@ -685,11 +726,17 @@ class ResNetBlockDenoiser(BaseModule):
             padding=0,
         )
 
+        self.time_mlp = TimeMLP(
+            embedding_dim=decoder_dim,
+            hidden_dim=decoder_dim * 4,
+            out_dim=decoder_dim
+        )
+
     def forward(self, x, cond, time_emb, speaker_emb, mask):
         """
-        x: (B, n_feats, T) - noisy mel-spectrogram
+        x: (B, decoder_dim, T) - noisy mel-spectrogram
         t: (B, decoder_dim) - diffusion step
-        cond: (B, n_feats, T) - conditional features
+        cond: (B, n_enc_channels, T) - conditional features
         speaker_emb: (B, speaker_emb_dim) - speaker embedding
         mask: (B, 1, T) - padding mask
         Returns:
@@ -709,7 +756,8 @@ class ResNetBlockDenoiser(BaseModule):
         # x: (B, C, T)
         # t_emb: (B, decoder_dim) -> (B, decoder_dim, 1)
         # speaker_emb: (B, decoder_dim) -> (B, decoder_dim, 1)
-        residual = x + t_emb.unsqueeze(-1)
+        # residual = x + t_emb.unsqueeze(-1)  # (B, decoder_dim, T)
+        residual = self.time_mlp(x, t_emb)
         x = residual + speaker_emb.unsqueeze(-1) + cond
 
         x = self.conv_layer(x, mask)  # (B, decoder_dim * 2, T)
@@ -730,6 +778,7 @@ class ConsistencyDenoiser(BaseModule):
             decoder_dim, 
             speaker_emb_dim, 
             n_feats,
+            n_enc_channels,
             pe_scale: int=10
         ):
         super(ConsistencyDenoiser, self).__init__()
@@ -737,6 +786,7 @@ class ConsistencyDenoiser(BaseModule):
         self.decoder_dim = decoder_dim
         self.speaker_emb_dim = speaker_emb_dim
         self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
         self.pe_scale = pe_scale
 
         self.time_pos_emb = SinusoidalPosEmb(dim=decoder_dim)
@@ -761,6 +811,7 @@ class ConsistencyDenoiser(BaseModule):
                     decoder_dim=decoder_dim,
                     speaker_emb_dim=speaker_emb_dim,
                     n_feats=n_feats,
+                    n_enc_channels=n_enc_channels
                 )
                 for _ in range(num_blocks)
             ]
@@ -1142,3 +1193,73 @@ class ConsistencyDiffusion(BaseModule):
         )
 
         return diff_loss, recon_loss, x_t
+    
+
+from model.base import BaseModule
+
+class ConsistencyDiffusionWithMuFromIsolationTextEncoder(ConsistencyDiffusion):
+    def __init__(
+            self, 
+            n_feats: int,
+            n_enc_channels: int,
+            dim: int,
+            num_warmup_steps: int,
+            total_steps: int,
+            num_blocks: int=20,
+            spk_emb_dim=64,
+            pe_scale=1,
+            ema_rate: float=0.98,
+            sigma_max: float=80.0,
+            sigma_min: float=0.002,
+            rho: float=7.0,
+            sigma_data: float=0.5,
+            start_scales: int=2,
+            end_scales: int=200,
+            weight_schedule: str="karras"
+    ):
+        BaseModule.__init__(self=self)
+        self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
+        self.dim = dim
+        self.num_warmup_steps = num_warmup_steps
+        self.num_blocks = num_blocks
+        self.spk_emb_dim = spk_emb_dim
+        self.pe_scale = pe_scale
+        self.ema_rate = ema_rate
+
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.sigma_data: float=sigma_data
+        self.start_scales = start_scales
+        self.end_scales = end_scales
+        self.num_scales = self.start_scales
+        self.weight_schedule = weight_schedule
+
+        self.estimator = ConsistencyDenoiser(
+            num_blocks=num_blocks,
+            decoder_dim=dim,
+            speaker_emb_dim=spk_emb_dim,
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            pe_scale=pe_scale
+        )
+
+        self.target_estimator = ConsistencyDenoiser(
+            num_blocks=num_blocks,
+            decoder_dim=dim,
+            speaker_emb_dim=spk_emb_dim,
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            pe_scale=pe_scale
+        )
+
+        self.target_estimator.requires_grad_(False)
+        self.copy_target_params()
+
+        self.ema_and_scales_fn = self.create_ema_and_scales_fn(
+            start_ema=self.ema_rate,
+            start_scales=self.start_scales,
+            end_scales=self.end_scales,
+            total_steps=total_steps
+        )

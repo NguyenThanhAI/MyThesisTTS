@@ -11,3 +11,5 @@ from .tts import GradTTSWithSpeakerEmbeddingAndSALN, StyleVarianceAdaptorGradTTS
 from .tts import GradTTSWithSpeakerEmbeddingAdditive
 from .tts import ConsistencyTrigFlowWithSpeakerEmbedding
 from .tts import ConsistencyModelWithSpeakerEmbeddingAdditive, ConsistencyModelWithSpeakerEmbeddingAndSALN
+
+from .tts import ConsistencyModelWithSpeakerEmbeddingAdditiveAndIsolation, ConsistencyModelWithSpeakerEmbeddingAndSALNAndIsolation
