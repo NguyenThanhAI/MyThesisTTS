@@ -19,7 +19,8 @@ import comet_ml
 from comet_ml import Experiment, ExistingExperiment
 
 import params
-from model import ConsistencyTrigFlowWithSpeakerEmbedding
+# from model import ConsistencyTrigFlowWithSpeakerEmbedding
+from model import ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation, ConsistencyTrigFlowWithSpeakerEmbeddingAndSALNAndIsolation
 from data import LMDBTextMelSpeakerEmbedPrecomputedDataset, LMDBTextMelSpeakerEmbedPrecomputedBatchCollate
 from utils import plot_mel, plot_tensor, save_plot, plot_mel_comet, plot_attn_comet
 from utils import TensorBoardLoggerExperimentLikeComet
@@ -145,7 +146,7 @@ def find_resume_checkpoint(resume_checkpoint_dir):
         return max_step_checkpoint
     return None
 
-def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, use_saln: bool=True, dataset_name="LJSpeech"):
+def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, use_additive: bool=True, dataset_name="LJSpeech"):
     ckpt = {"model_state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "lr_scheduler": scheduler.state_dict(),
@@ -153,15 +154,15 @@ def save_model(model, optimizer, scheduler, epoch, iteration, batch_index, use_s
             "iteration": iteration,
             "batch_index": batch_index}
     print("Save check point at epoch {} and iteration {}".format(epoch, iteration))
-    if use_saln:
-        add = "use_saln"
+    if use_additive:
+        add = "use_additive"
     else:
-        add = "no_saln"
+        add = "no_additive"
     torch.save(ckpt, f=os.path.join(log_dir, f"consistency_trigflow_multi_speaker_{dataset_name}_{add}_steps_{iteration}.pt"))
     
 
 def evaluate_losses(
-        model: ConsistencyTrigFlowWithSpeakerEmbedding, 
+        model: Union[ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation, ConsistencyTrigFlowWithSpeakerEmbeddingAndSALNAndIsolation], 
         val_loader: DataLoader, 
         experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], 
         step: int
@@ -180,7 +181,7 @@ def evaluate_losses(
 
             dur_loss, prior_loss, diff_loss = model.compute_loss(x=x, x_lengths=x_lengths,
                                                                  y=y, y_lengths=y_lengths,
-                                                                 step=1000,
+                                                                 step=10000,
                                                                  spk=spker_embed,
                                                                  out_size=out_size)
             size_of_this_batch = x.shape[0]
@@ -205,7 +206,7 @@ def evaluate_losses(
     model.train()
         
 def synthesize_melspectrogram(
-        model: ConsistencyTrigFlowWithSpeakerEmbedding, 
+        model: Union[ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation, ConsistencyTrigFlowWithSpeakerEmbeddingAndSALNAndIsolation], 
         val_dataset, 
         experiment: Union[Experiment, ExistingExperiment, TensorBoardLoggerExperimentLikeComet], step: int):
     print("Synthesis")
@@ -217,7 +218,7 @@ def synthesize_melspectrogram(
                 x_lengths = torch.LongTensor([x.shape[-1]]).to(device=device)
                 y = item["y"]
                 spker_embed = item["spker_embed"].to(device=device)
-                y_enc, y_dec, attn = model(x, x_lengths, spk=spker_embed, n_timesteps=50)
+                y_enc, y_dec, attn = model(x, x_lengths, spk=spker_embed, n_timesteps=10)
 
                 fig_mel_gt = plot_mel_comet(y)
                 experiment.log_figure(
@@ -296,10 +297,13 @@ def get_args():
     parser.add_argument("--comet_api_key", type=str, default=None)
     parser.add_argument("--comet_existing_experiment_id", type=str, default=None)
 
-    parser.add_argument("--use_saln", type=str2bool, default=False)
+    parser.add_argument("--use_additive", type=str2bool, default=True)
+    # parser.add_argument("--use_saln", type=str2bool, default=False)
     parser.add_argument("--log_to_file_every", type=int, default=1)
     parser.add_argument("--dataset_name", type=str, default="LJSpeech")
 
+    parser.add_argument("--num_dec_blocks", type=int, default=20)
+    parser.add_argument("--ema_rate", type=float, default=0.95)
     args = parser.parse_args()
 
     return args
@@ -355,9 +359,13 @@ if __name__ == "__main__":
     comet_api_key = args.comet_api_key
     comet_existing_experiment_id = args.comet_existing_experiment_id
 
-    use_saln = args.use_saln
+    use_additive = args.use_additive
+    # use_saln = args.use_saln
     log_to_file_every = args.log_to_file_every
     dataset_name = args.dataset_name
+
+    num_dec_blocks = args.num_dec_blocks
+    ema_rate = args.ema_rate
 
     print(f"Arguments: {args}")
 
@@ -413,11 +421,10 @@ if __name__ == "__main__":
         shuffle=False
     )
     print("Initializing model...")
-    if not use_saln:
-        print("Using Consitency TrigFlow with Speaker Embedding model")
-        model = ConsistencyTrigFlowWithSpeakerEmbedding(
+    if use_additive:
+        print("Using Consitency TrigFlow with Speaker Embedding Additive and Isolation model")
+        model = ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation(
             n_vocab=nsymbols,
-            n_spks=2,
             spk_emb_dim=512,
             n_enc_channels=n_enc_channels,
             filter_channels=filter_channels,
@@ -430,7 +437,29 @@ if __name__ == "__main__":
             n_feats=n_feats, 
             dec_dim=dec_dim, 
             pe_scale=pe_scale,
-            num_warmup_steps=num_warmup_steps
+            num_warmup_steps=num_warmup_steps,
+            num_dec_blocks=num_dec_blocks,
+            ema_rate=ema_rate
+        ).to(device=device)
+    else:
+        print("Using Consitency TrigFlow with Speaker Embedding and SALN model")
+        model = ConsistencyTrigFlowWithSpeakerEmbeddingAndSALNAndIsolation(
+            n_vocab=nsymbols,
+            spk_emb_dim=512,
+            n_enc_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_enc_layers=n_enc_layers,
+            enc_kernel=enc_kernel,
+            enc_dropout=enc_dropout, 
+            window_size=window_size, 
+            n_feats=n_feats, 
+            dec_dim=dec_dim, 
+            pe_scale=pe_scale,
+            num_warmup_steps=num_warmup_steps,
+            num_dec_blocks=num_dec_blocks,
+            ema_rate=ema_rate
         ).to(device=device)
     # else:
     #     print("Using GradTTS with Speaker Embedding and SALN model")
@@ -564,13 +593,13 @@ if __name__ == "__main__":
 
             if iteration % save_every == 0:
                 save_model(model=model,
-                       optimizer=optimizer,
-                       scheduler=scheduler,
-                       epoch=epoch,
-                       iteration=iteration,
-                       batch_index=batch_idx,
-                       use_saln=use_saln,
-                       dataset_name=dataset_name)
+                           optimizer=optimizer,
+                           scheduler=scheduler,
+                           epoch=epoch,
+                           iteration=iteration,
+                           batch_index=batch_idx,
+                           use_additive=use_additive,
+                           dataset_name=dataset_name)
                 
             if iteration % synthesize_every == 0:
                 synthesize_melspectrogram(model=model,
@@ -594,7 +623,7 @@ if __name__ == "__main__":
                        epoch=epoch,
                        iteration=iteration,
                        batch_index=batch_idx,
-                       use_saln=use_saln,
+                       use_additive=use_additive,
                        dataset_name=dataset_name)
             torch.cuda.empty_cache()
             quit()
@@ -607,7 +636,7 @@ if __name__ == "__main__":
                        epoch=epoch,
                        iteration=iteration,
                        batch_index=batch_idx,
-                       use_saln=use_saln,
+                       use_additive=use_additive,
                        dataset_name=dataset_name)
             torch.cuda.empty_cache()
             quit()

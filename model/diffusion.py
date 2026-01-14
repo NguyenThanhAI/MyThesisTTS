@@ -325,103 +325,100 @@ class Diffusion(BaseModule):
 
 
 class DenoiserTrigFlow(BaseModule):
-    def __init__(self, dim, dim_mults=(1, 2, 4), groups=8,
-                 n_spks=None, spk_emb_dim=64, n_feats=80, pe_scale=1000):
+    def __init__(
+            self, 
+            num_blocks, 
+            decoder_dim, 
+            speaker_emb_dim, 
+            n_feats,
+            n_enc_channels,
+            pe_scale: int=10
+        ):
         super(DenoiserTrigFlow, self).__init__()
-        self.dim = dim
-        self.dim_mults = dim_mults
-        self.groups = groups
-        self.n_spks = n_spks if not isinstance(n_spks, type(None)) else 1
-        self.spk_emb_dim = spk_emb_dim
+        self.num_blocks = num_blocks
+        self.decoder_dim = decoder_dim
+        self.speaker_emb_dim = speaker_emb_dim
+        self.n_feats = n_feats
+        self.n_enc_channels = n_enc_channels
         self.pe_scale = pe_scale
-        
-        if n_spks > 1:
-            self.spk_mlp = torch.nn.Sequential(torch.nn.Linear(in_features=spk_emb_dim, out_features=spk_emb_dim * 4), 
-                                               Mish(),
-                                               torch.nn.Linear(in_features=spk_emb_dim * 4, out_features=n_feats))
-        self.time_pos_emb = SinusoidalPosEmb(dim=dim)
-        self.mlp = torch.nn.Sequential(torch.nn.Linear(in_features=dim, out_features=dim * 4), 
-                                       Mish(),
-                                       torch.nn.Linear(in_features=dim * 4, out_features=dim))
 
-        dims = [2 + (1 if n_spks > 1 else 0), *map(lambda m: dim * m, dim_mults)]
-        in_out = list(zip(dims[:-1], dims[1:]))
-        self.downs = torch.nn.ModuleList([])
-        self.ups = torch.nn.ModuleList([])
-        num_resolutions = len(in_out)
+        self.time_pos_emb = SinusoidalPosEmb(dim=decoder_dim)
+        self.time_mlp = torch.nn.Sequential(
+            torch.nn.Linear(in_features=decoder_dim, out_features=decoder_dim * 4),
+            torch.nn.SiLU(),
+            torch.nn.Linear(in_features=decoder_dim * 4, out_features=decoder_dim),
+            torch.nn.SiLU(),
+        )
 
-        for ind, (dim_in, dim_out) in enumerate(in_out):
-            is_last = ind >= (num_resolutions - 1)
-            self.downs.append(torch.nn.ModuleList([
-                       ResnetBlock(dim=dim_in, dim_out=dim_out, time_emb_dim=dim),
-                       ResnetBlock(dim=dim_out, dim_out=dim_out, time_emb_dim=dim),
-                       Residual(fn=Rezero(fn=LinearAttention(dim=dim_out))),
-                       Downsample(dim=dim_out) if not is_last else torch.nn.Identity()]))
+        self.input_projection = ConvNorm(
+            in_channels=n_feats,
+            out_channels=decoder_dim,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            )
 
-        mid_dim = dims[-1]
-        self.mid_block1 = ResnetBlock(dim=mid_dim, dim_out=mid_dim, time_emb_dim=dim)
-        self.mid_attn = Residual(fn=Rezero(fn=LinearAttention(dim=mid_dim)))
-        self.mid_block2 = ResnetBlock(dim=mid_dim, dim_out=mid_dim, time_emb_dim=dim)
+        self.resnet_blocks = torch.nn.ModuleList(
+            [
+                ResNetBlockDenoiser(
+                    decoder_dim=decoder_dim,
+                    speaker_emb_dim=speaker_emb_dim,
+                    n_feats=n_feats,
+                    n_enc_channels=n_enc_channels
+                )
+                for _ in range(num_blocks)
+            ]
+        )
 
-        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
-            self.ups.append(torch.nn.ModuleList([
-                     ResnetBlock(dim=dim_out * 2, dim_out=dim_in, time_emb_dim=dim),
-                     ResnetBlock(dim=dim_in, dim_out=dim_in, time_emb_dim=dim),
-                     Residual(fn=Rezero(fn=LinearAttention(dim=dim_in))),
-                     Upsample(dim=dim_in)]))
-        self.final_block = Block(dim=dim, dim_out=dim)
-        self.final_conv = torch.nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1)
+        self.skip_projection = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=decoder_dim,
+            kernel_size=1,
+            stride=1,
+            padding=0
+        )
 
-        self.logvar_linear = torch.nn.Linear(in_features=dim, out_features=1)
+        self.output_projection = ConvNorm(
+            in_channels=decoder_dim,
+            out_channels=n_feats,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
 
-    def forward(self, x, mask, mu, t, spk=None, return_logvar=True):
-        if not isinstance(spk, type(None)):
-            s = self.spk_mlp(spk)
-        
-        t = self.time_pos_emb(t, scale=self.pe_scale)
-        t = self.mlp(t)
+        self.logvar_linear = torch.nn.Linear(in_features=decoder_dim, out_features=1)
 
-        if self.n_spks < 2:
-            x = torch.stack([mu, x], 1)
-        else:
-            s = s.unsqueeze(-1).repeat(1, 1, x.shape[-1])
-            x = torch.stack([mu, x, s], 1)
-        mask = mask.unsqueeze(1)
+    def forward(self, x, mu, t, spk, mask, return_logvar=True):
+        """
+        x: (B, n_feats, T) - noisy mel-spectrogram
+        mu: (B, n_feats, T) - conditional features
+        t: (B, ) - diffusion step
+        spk: (B, speaker_emb_dim) - speaker embedding
+        mask: (B, 1, T) - padding mask
+        Returns:
+        """
+        time_emb = self.time_pos_emb.forward(t, scale=self.pe_scale)  # (B, decoder_dim)
+        time_emb = self.time_mlp(time_emb) # (B, decoder_dim)
+        x = self.input_projection(x, mask)  # (B, decoder_dim, T)
+        x = F.relu(x)
+        skip_connections = []
+        for resnet_block in self.resnet_blocks:
+            x, skip = resnet_block(
+                x, mu, time_emb, spk, mask
+            )  # x: (B, decoder_dim, T), skip: (B, decoder_dim, T)
+            skip_connections.append(skip)
 
-        hiddens = []
-        masks = [mask]
-        for resnet1, resnet2, attn, downsample in self.downs:
-            mask_down = masks[-1]
-            x = resnet1(x, mask_down, t)
-            x = resnet2(x, mask_down, t)
-            x = attn(x)
-            hiddens.append(x)
-            x = downsample(x * mask_down)
-            masks.append(mask_down[:, :, :, ::2])
+        x = torch.sum(torch.stack(skip_connections, dim=0), dim=0) / math.sqrt(self.num_blocks)  # (B, decoder_dim, T)
+        x = self.skip_projection(x, mask)  # (B, decoder_dim, T)
+        x = F.relu(x)
+        x = self.output_projection(x, mask)  # (B, n_feats, T)
 
-        masks = masks[:-1]
-        mask_mid = masks[-1]
-        x = self.mid_block1(x, mask_mid, t)
-        x = self.mid_attn(x)
-        x = self.mid_block2(x, mask_mid, t)
-
-        for resnet1, resnet2, attn, upsample in self.ups:
-            mask_up = masks.pop()
-            x = torch.cat((x, hiddens.pop()), dim=1)
-            x = resnet1(x, mask_up, t)
-            x = resnet2(x, mask_up, t)
-            x = attn(x)
-            x = upsample(x * mask_up)
-
-        x = self.final_block(x, mask)
-        output = self.final_conv(x * mask)
-
-        logvar = self.logvar_linear(t)
+        logvar = self.logvar_linear(time_emb)
 
         if return_logvar:
-            return (output * mask).squeeze(1), logvar
+            return x, logvar
         else:
-            return (output * mask).squeeze(1)
+            return x
 
 from functools import partial
 import numpy as np
@@ -430,9 +427,10 @@ class ConsitencyTrigFlow(BaseModule):
     def __init__(
             self, 
             n_feats, 
+            n_enc_channels: int,
             dim,
             num_warmup_steps: int,
-            n_spks=1, 
+            num_blocks: int=20,
             spk_emb_dim=64,
             pe_scale=1000,
             ema_rate: float=0.98):
@@ -440,15 +438,16 @@ class ConsitencyTrigFlow(BaseModule):
         self.n_feats = n_feats
         self.dim = dim
         self.num_warmup_steps = num_warmup_steps
-        self.n_spks = n_spks
         self.spk_emb_dim = spk_emb_dim
         self.pe_scale = pe_scale
         self.ema_rate = ema_rate
 
         self.estimator = DenoiserTrigFlow(
-            dim=dim,
-            n_spks=n_spks,
-            spk_emb_dim=spk_emb_dim,
+            num_blocks=num_blocks,
+            decoder_dim=dim,
+            speaker_emb_dim=spk_emb_dim,
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
             pe_scale=pe_scale
         )
 

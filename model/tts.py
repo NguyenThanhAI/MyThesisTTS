@@ -346,28 +346,28 @@ class GradTTSWithSpeakerEmbedding(BaseModule):
         return dur_loss, prior_loss, diff_loss
     
 
-class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
+class ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation(BaseModule):
     def __init__(
         self,
         n_vocab, 
-        n_spks, 
         spk_emb_dim, 
         n_enc_channels, 
         filter_channels, 
         filter_channels_dp, 
         n_heads, 
-        n_enc_layers, 
+        n_enc_layers,
         enc_kernel, 
         enc_dropout, 
         window_size, 
         n_feats, 
         dec_dim, 
         pe_scale,
-        num_warmup_steps
+        num_warmup_steps,
+        num_dec_blocks,
+        ema_rate=0.999
     ):
-        super(ConsistencyTrigFlowWithSpeakerEmbedding, self).__init__()
+        super(ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation, self).__init__()
         self.n_vocab = n_vocab
-        self.n_spks = n_spks
         self.spk_emb_dim = spk_emb_dim
         self.n_enc_channels = n_enc_channels
         self.filter_channels = filter_channels
@@ -381,29 +381,32 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
         self.dec_dim = dec_dim
         self.pe_scale = pe_scale
         self.num_warmup_steps = num_warmup_steps
+        self.num_dec_blocks = num_dec_blocks
+        self.ema_rate = ema_rate
 
-        self.encoder = TextEncoder(
+        self.encoder = StyleAdditiveTextIsolationEncoder(
             n_vocab=n_vocab, 
-            n_feats=n_feats, 
-            n_channels=n_enc_channels, 
-            filter_channels=filter_channels, 
-            filter_channels_dp=filter_channels_dp, 
-            n_heads=n_heads, 
-            n_layers=n_enc_layers, 
-            kernel_size=enc_kernel, 
-            p_dropout=enc_dropout, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel,
+            p_dropout=enc_dropout,
             window_size=window_size,
-            spk_emb_dim=spk_emb_dim, 
-            n_spks=n_spks
+            spk_emb_dim=spk_emb_dim,
         )
 
         self.decoder = ConsitencyTrigFlow(
-            n_feats,
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
             dim=dec_dim,
             num_warmup_steps=num_warmup_steps,
-            n_spks=n_spks,
+            num_blocks=num_dec_blocks,
             spk_emb_dim=spk_emb_dim,
-            pe_scale=pe_scale
+            pe_scale=pe_scale,
+            ema_rate=ema_rate
         )
 
     # def update_ema_target_params(self):
@@ -430,7 +433,7 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
         x, x_lengths = self.relocate_input([x, x_lengths])
 
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
+        conditioned_x, mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
 
         w = torch.exp(input=logw) * x_mask
         w_ceil = torch.ceil(input=w) * length_scale
@@ -446,12 +449,21 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
         # Align encoded text and get mu_y
         mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
+
+        conditioned_x = torch.matmul(attn.squeeze(1).transpose(1, 2), conditioned_x.transpose(1, 2))
+        conditioned_x = conditioned_x.transpose(1, 2)
+
         encoder_outputs = mu_y[:, :, :y_max_length]
 
         z = torch.rand_like(input=mu_y, device=mu_y.device)
 
         # Generate sample by performing reverse dynamics
-        decoder_outputs = self.decoder.forward(z=z, mask=y_mask, mu=mu_y, n_timesteps=n_timesteps, spk=spk)
+        decoder_outputs = self.decoder.forward(
+            z=z, 
+            mask=y_mask, 
+            mu=conditioned_x, 
+            n_timesteps=n_timesteps, 
+            spk=spk)
 
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
@@ -475,7 +487,7 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
         x, x_lengths, y, y_lengths = self.relocate_input([x, x_lengths, y, y_lengths])
         
         # Get encoder_outputs `mu_x` and log-scaled token durations `logw`
-        mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
+        conditioned_x, mu_x, logw, x_mask = self.encoder(x, x_lengths, spk)
         y_max_length = y.shape[-1]
 
         y_mask = sequence_mask(length=y_lengths, max_length=y_max_length).unsqueeze(1).to(x_mask)
@@ -526,13 +538,86 @@ class ConsistencyTrigFlowWithSpeakerEmbedding(BaseModule):
         mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
 
+        conditioned_x = torch.matmul(attn.squeeze(1).transpose(1, 2), conditioned_x.transpose(1, 2))
+        conditioned_x = conditioned_x.transpose(1, 2)
+
         # Compute loss of score-based decoder
-        diff_loss, xt = self.decoder.compute_loss(x0=y, mask=y_mask, mu=mu_y, step=step, spk=spk)
+        diff_loss, xt = self.decoder.compute_loss(
+            x0=y, 
+            mask=y_mask, 
+            mu=conditioned_x, 
+            step=step, 
+            spk=spk
+        )
 
         # Compute loss between aligned encoder outputs and mel-spectrogram
         prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
         prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
         return dur_loss, prior_loss, diff_loss
+    
+
+class ConsistencyTrigFlowWithSpeakerEmbeddingAndSALNAndIsolation(ConsistencyTrigFlowWithSpeakerEmbeddingAdditiveAndIsolation):
+    def __init__(
+        self,
+        n_vocab, 
+        spk_emb_dim, 
+        n_enc_channels, 
+        filter_channels, 
+        filter_channels_dp, 
+        n_heads, 
+        n_enc_layers,
+        enc_kernel, 
+        enc_dropout, 
+        window_size, 
+        n_feats, 
+        dec_dim, 
+        pe_scale,
+        num_warmup_steps,
+        num_dec_blocks,
+        ema_rate=0.999
+    ):
+        BaseModule.__init__(self=self)
+        self.n_vocab = n_vocab
+        self.spk_emb_dim = spk_emb_dim
+        self.n_enc_channels = n_enc_channels
+        self.filter_channels = filter_channels
+        self.filter_channels_dp = filter_channels_dp
+        self.n_heads = n_heads
+        self.n_enc_layers = n_enc_layers
+        self.enc_kernel = enc_kernel
+        self.enc_dropout = enc_dropout
+        self.window_size = window_size
+        self.n_feats = n_feats
+        self.dec_dim = dec_dim
+        self.pe_scale = pe_scale
+        self.num_warmup_steps = num_warmup_steps
+        self.num_dec_blocks = num_dec_blocks
+        self.ema_rate = ema_rate
+
+        self.encoder = StyleTextIsolationEncoder(
+            n_vocab=n_vocab, 
+            n_feats=n_feats,
+            n_channels=n_enc_channels,
+            filter_channels=filter_channels,
+            filter_channels_dp=filter_channels_dp,
+            n_heads=n_heads,
+            n_layers=n_enc_layers,
+            kernel_size=enc_kernel,
+            p_dropout=enc_dropout,
+            window_size=window_size,
+            spk_emb_dim=spk_emb_dim,
+        )
+
+        self.decoder = ConsitencyTrigFlow(
+            n_feats=n_feats,
+            n_enc_channels=n_enc_channels,
+            dim=dec_dim,
+            num_warmup_steps=num_warmup_steps,
+            num_blocks=num_dec_blocks,
+            spk_emb_dim=spk_emb_dim,
+            pe_scale=pe_scale,
+            ema_rate=ema_rate
+        )
 
 
 class GradTTSWithSpeakerEmbeddingAndSALN(GradTTSWithSpeakerEmbedding):
