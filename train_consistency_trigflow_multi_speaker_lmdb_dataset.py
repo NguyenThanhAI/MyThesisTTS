@@ -280,12 +280,12 @@ def get_args():
     parser.add_argument("--n_heads", type=int, default=params.n_heads)
     parser.add_argument("--window_size", type=int, default=params.window_size)
     parser.add_argument("--n_feats", type=int, default=params.n_feats)
-    parser.add_argument("--n_fft", type=int, default=params.n_fft)
-    parser.add_argument("--sample_rate", type=int, default=params.sample_rate)
-    parser.add_argument("--hop_length", type=int, default=params.hop_length)
-    parser.add_argument("--win_length", type=int, default=params.win_length)
-    parser.add_argument("--f_min", type=int, default=params.f_min)
-    parser.add_argument("--f_max", type=int, default=params.f_max)
+    # parser.add_argument("--n_fft", type=int, default=params.n_fft)
+    # parser.add_argument("--sample_rate", type=int, default=params.sample_rate)
+    # parser.add_argument("--hop_length", type=int, default=params.hop_length)
+    # parser.add_argument("--win_length", type=int, default=params.win_length)
+    # parser.add_argument("--f_min", type=int, default=params.f_min)
+    # parser.add_argument("--f_max", type=int, default=params.f_max)
     parser.add_argument("--dec_dim", type=int, default=params.dec_dim)
     # parser.add_argument("--beta_min", type=float, default=params.beta_min)
     # parser.add_argument("--beta_max", type=float, default=params.beta_max)
@@ -340,12 +340,12 @@ if __name__ == "__main__":
     window_size = args.window_size
 
     n_feats = args.n_feats
-    n_fft = args.n_fft
-    sample_rate = args.sample_rate
-    hop_length = args.hop_length
-    win_length = args.win_length
-    f_min = args.f_min
-    f_max = args.f_max
+    # n_fft = args.n_fft
+    # sample_rate = args.sample_rate
+    # hop_length = args.hop_length
+    # win_length = args.win_length
+    # f_min = args.f_min
+    # f_max = args.f_max
 
     dec_dim = args.dec_dim
     # beta_min = args.beta_min
