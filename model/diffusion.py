@@ -604,9 +604,9 @@ class ConsitencyTrigFlow(BaseModule):
 
         # weight = 1
         prior_weight = 1 / (self.sigma_data * torch.tan(time))
-        # loss = (weight / (torch.exp(logvar) * x0[0].numel())) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) + logvar
+        loss = (prior_weight / (torch.exp(logvar) * x0[0].numel())) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) + logvar
         # loss = (weight / (torch.exp(logvar))) * torch.square(F_theta - F_theta_minus - g) + logvar
-        loss = (torch.exp(logvar) * prior_weight / x0[0].numel()) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) - logvar
+        # loss = (torch.exp(logvar) * prior_weight / x0[0].numel()) * torch.square(F_theta - F_theta_minus - g).sum(dim=(1, 2), keepdim=True) - logvar
         loss = loss.mean()
         # loss_g = (weight / torch.exp(logvar)) * torch.square(g) + logvar
         # loss_g = loss_g.mean()
